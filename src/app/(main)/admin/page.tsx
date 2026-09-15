@@ -167,6 +167,7 @@ export default function Admin() {
   const [showEndRoundConfirm, setShowEndRoundConfirm] = useState(false);
   const [roundToEnd, setRoundToEnd] = useState<number | null>(null);
   const [showResetRedisConfirm, setShowResetRedisConfirm] = useState(false);
+  const [showResetUsersConfirm, setShowResetUsersConfirm] = useState(false);
   const [matchParticipants, setMatchParticipants] = useState<Participant[]>([]);
   const [selectedRoundForMatches, setSelectedRoundForMatches] = useState(0);
   const [qualifyCount, setQualifyCount] = useState<number | "">("");
@@ -750,32 +751,39 @@ export default function Admin() {
     resetAllRedis();
   };
 
-  const handleQualifyRound3 = () => {
+  const resetUsers = () => {
     if (!socket) {
       showErrorToast("Socket not connected");
       return;
     }
 
-    if (!qualifyCount || qualifyCount <= 0) {
-      showErrorToast("Enter a valid number of users to qualify");
-      return;
-    }
-
-    setIsQualifying(true);
-
     socket.emit(
-      "admin:qualifyRound3",
-      { count: qualifyCount },
-      (response: { success: boolean; error?: string }) => {
-        setIsQualifying(false);
-
+      "admin:resetUsers",
+      {},
+      (response: { success?: boolean; error?: string }) => {
         if (response?.success) {
-          showSuccessToast(`Top ${qualifyCount} users qualified for Round 3`);
+          showSuccessToast(
+            "Reset all player and admin scores, R2 roles, and R3 qualification",
+          );
+          socket.emit("user:leaderboard");
         } else {
-          showErrorToast(response?.error || "Failed to qualify users");
+          showErrorToast(response?.error || "Failed to reset users");
         }
       },
     );
+    setShowResetUsersConfirm(false);
+  };
+
+  const handleResetUsersClick = () => {
+    setShowResetUsersConfirm(true);
+  };
+
+  const handleCancelResetUsers = () => {
+    setShowResetUsersConfirm(false);
+  };
+
+  const handleConfirmResetUsers = () => {
+    resetUsers();
   };
 
   const handleQualifyR3 = () => {
@@ -1346,17 +1354,105 @@ export default function Admin() {
             </div>
           )}
 
+          {/* Reset Users Confirmation Modal */}
+          {showResetUsersConfirm && (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4">
+              <div className="bg-gray-900 border-2 border-red-500 rounded-lg p-6 max-w-lg w-full">
+                <h3 className="text-xl font-bold text-red-500 mb-2">
+                  Confirm Reset Users
+                </h3>
+                <p className="text-red-200 text-sm mb-4">
+                  Postgres User rows only. Redis is not touched.
+                </p>
+                <div className="text-white text-sm space-y-3 mb-6">
+                  <div>
+                    <p className="font-semibold text-red-300 mb-1">Clears</p>
+                    <ul className="list-disc list-inside text-gray-200 space-y-1">
+                      <li>
+                        Every user (players and admins):{" "}
+                        <span className="font-mono">eventScore = 0</span>
+                      </li>
+                      <li>
+                        <span className="font-mono">round2Role = null</span>
+                      </li>
+                      <li>
+                        <span className="font-mono">
+                          qualifiedForR3 = false
+                        </span>
+                      </li>
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-gray-300 mb-1">
+                      Does not change
+                    </p>
+                    <ul className="list-disc list-inside text-gray-400 space-y-1">
+                      <li>
+                        PLAYER/ADMIN <span className="font-mono">role</span>
+                      </li>
+                      <li>Submissions, round statuses, problems</li>
+                      <li>Anything in Redis (live matches, lobbies, etc.)</li>
+                    </ul>
+                  </div>
+                  <p className="text-gray-400">
+                    Zeroes scores and Round 2/R3 flags in the DB. Use Reset
+                    Redis too if you want a clean live-game slate.
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleConfirmResetUsers}
+                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-medium transition-all"
+                  >
+                    Yes, Reset Users
+                  </button>
+                  <button
+                    onClick={handleCancelResetUsers}
+                    className="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded font-medium transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Reset Redis Confirmation Modal */}
           {showResetRedisConfirm && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4">
-              <div className="bg-gray-900 border-2 border-yellow-500 rounded-lg p-6 max-w-md w-full">
-                <h3 className="text-xl font-bold text-yellow-500 mb-4">
+              <div className="bg-gray-900 border-2 border-yellow-500 rounded-lg p-6 max-w-lg w-full">
+                <h3 className="text-xl font-bold text-yellow-500 mb-2">
                   Confirm Reset Redis
                 </h3>
-                <p className="text-white mb-6">
-                  Are you sure you want to reset Redis for ALL rounds? This will
-                  clear all cached data for all rounds (0, 1, 2, 3).
+                <p className="text-yellow-200 text-sm mb-4">
+                  Redis only. Postgres is not touched.
                 </p>
+                <div className="text-white text-sm space-y-3 mb-6">
+                  <div>
+                    <p className="font-semibold text-yellow-300 mb-1">
+                      Clears (FLUSHDB — all keys in this Redis DB)
+                    </p>
+                    <ul className="list-disc list-inside text-gray-200 space-y-1">
+                      <li>Round 0–3 live state, lobbies, and matches</li>
+                      <li>Bounties, cooldowns, submit locks</li>
+                      <li>Cached leaderboard data</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-gray-300 mb-1">
+                      Does not change
+                    </p>
+                    <ul className="list-disc list-inside text-gray-400 space-y-1">
+                      <li>User scores, Round 2 roles, R3 qualification</li>
+                      <li>Submissions, round statuses, problems in Postgres</li>
+                    </ul>
+                  </div>
+                  <p className="text-gray-400">
+                    Wipes in-memory / live game state, then rebroadcasts the
+                    current round. Use Reset Users too if you also want scores
+                    and flags zeroed.
+                  </p>
+                </div>
                 <div className="flex gap-3">
                   <button
                     onClick={handleConfirmResetRedis}
@@ -1643,45 +1739,6 @@ export default function Admin() {
               </div>
             </div>
 
-            {/* Qualify Users for Round 3 */}
-            <div className="mt-8 bg-gray-800/50 rounded-lg p-6 border border-green-500/50">
-              <h4 className="text-green-400 font-medium mb-4">
-                Qualify Users for Round 3
-              </h4>
-
-              <p className="text-gray-300 text-sm mb-4">
-                Select how many top users (by leaderboard score) should qualify
-                for Round 3. This will{" "}
-                <span className="text-red-400 font-semibold">
-                  overwrite previous qualifications
-                </span>
-                . Use the live event leaderboard below for the current ranking.
-              </p>
-
-              <div className="flex flex-col md:flex-row gap-4 items-center">
-                <input
-                  type="number"
-                  min={1}
-                  placeholder="Number of users (e.g. 20)"
-                  value={qualifyCount || ""}
-                  onChange={(e) => setQualifyCount(parseInt(e.target.value))}
-                  className="w-full md:w-64 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-                />
-
-                <button
-                  onClick={handleQualifyRound3}
-                  disabled={isQualifying || !socket}
-                  className={`px-6 py-2 rounded font-medium text-white transition-all ${
-                    isQualifying || !socket
-                      ? "bg-gray-600 cursor-not-allowed opacity-50"
-                      : "bg-green-600 hover:bg-green-500 hover:scale-105"
-                  }`}
-                >
-                  {isQualifying ? "Qualifying..." : "Qualify for Round 3"}
-                </button>
-              </div>
-            </div>
-
             {/* End Round Section */}
             <div className="mt-8 bg-gray-800/50 rounded-lg p-6">
               <h4 className="text-orange-400 font-medium mb-4">
@@ -1728,8 +1785,32 @@ export default function Admin() {
                 </button>
               </div>
               <p className="text-xs text-gray-400 mt-3 text-center">
-                Note: This will reset the Redis data for all rounds (0, 1, 2,
-                3).
+                Redis only (FLUSHDB). Wipes live game state. Does not change
+                Postgres scores or R2/R3 flags.
+              </p>
+            </div>
+
+            {/* Reset Users Section */}
+            <div className="mt-8 bg-gray-800/50 rounded-lg p-6">
+              <h4 className="text-orange-400 font-medium mb-4">
+                Reset User Controls
+              </h4>
+              <div className="flex justify-center">
+                <button
+                  onClick={handleResetUsersClick}
+                  disabled={!socket}
+                  className={`px-6 py-3 rounded text-sm font-medium transition-all ${
+                    !socket
+                      ? "bg-gray-600 cursor-not-allowed opacity-50"
+                      : "bg-red-600 hover:bg-red-500 hover:scale-105"
+                  } text-white`}
+                >
+                  Reset Users
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mt-3 text-center">
+                Postgres only. Zeroes eventScore, clears round2Role and
+                qualifiedForR3. Does not change Redis or PLAYER/ADMIN role.
               </p>
             </div>
 
