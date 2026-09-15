@@ -146,7 +146,7 @@ interface SubmissionPayload {
 interface SubmissionApiResponse {
   success: boolean;
   results?: SubmissionResult[];
-  summary?: { passed: number; total: number };
+  summary?: { passed: number; total: number; status?: string };
   submission?: { status: string };
   message?: string;
 }
@@ -1050,7 +1050,20 @@ export default function Round3Page() {
             passed: 0,
             total: (result.results || []).length,
           };
-          if (isFinalSubmission) {
+          const status = isFinalSubmission
+            ? result.submission?.status
+            : result.summary?.status;
+
+          if (
+            status === "TIME_LIMIT_EXCEEDED" ||
+            status === "MEMORY_LIMIT_EXCEEDED"
+          ) {
+            showErrorToast(
+              status === "MEMORY_LIMIT_EXCEEDED"
+                ? "Memory Limit Exceeded"
+                : "Time Limit Exceeded",
+            );
+          } else if (isFinalSubmission) {
             if (result.submission?.status === "ACCEPTED") {
               showSuccessToast(
                 `Submission Accepted! All ${summary.total} test cases passed.`,

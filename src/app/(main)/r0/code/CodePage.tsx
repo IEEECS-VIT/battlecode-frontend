@@ -842,8 +842,20 @@ export default function CodePage({
       const summary = result.summary || {};
       const passedTests = summary.passed || 0;
       const totalTests = summary.total || results.length;
+      const status = isSubmission
+        ? result.submission?.status
+        : result.summary?.status;
 
-      if (isSubmission) {
+      if (
+        status === "TIME_LIMIT_EXCEEDED" ||
+        status === "MEMORY_LIMIT_EXCEEDED"
+      ) {
+        showErrorToast(
+          status === "MEMORY_LIMIT_EXCEEDED"
+            ? "Memory Limit Exceeded"
+            : "Time Limit Exceeded",
+        );
+      } else if (isSubmission) {
         if (result.success) {
           if (passedTests === totalTests) {
             showSuccessToast(

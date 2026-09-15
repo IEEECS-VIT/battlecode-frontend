@@ -395,7 +395,20 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
             total: (result.results || []).length,
           };
 
-          if (isFinalSubmission) {
+          const status = isFinalSubmission
+            ? result.submission?.status
+            : result.summary?.status;
+
+          if (
+            status === "TIME_LIMIT_EXCEEDED" ||
+            status === "MEMORY_LIMIT_EXCEEDED"
+          ) {
+            showErrorToast(
+              status === "MEMORY_LIMIT_EXCEEDED"
+                ? "Memory Limit Exceeded"
+                : "Time Limit Exceeded",
+            );
+          } else if (isFinalSubmission) {
             if (result.submission?.status !== "ACCEPTED") {
               showErrorToast(
                 `${summary.passed}/${summary.total} test cases passed.`,
