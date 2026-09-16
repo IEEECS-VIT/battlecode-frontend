@@ -15,6 +15,14 @@ import CustomScrollbar from "@/components/shared/CustomScrollbar";
 import { Lightbulb, Play } from "lucide-react";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
 import SecureWrapper from "@/components/shared/SecureWrapper";
+import {
+  identitiesMatch,
+  normalizeRound2Role,
+  persistRound2Role,
+  readStoredRound2Role,
+  round2RolePath,
+  type Round2Role,
+} from "@/lib/round2Role";
 
 // --- Interfaces ---
 interface SessionData {
@@ -130,7 +138,7 @@ const formatTestCaseData = (data: unknown): string => {
 
 export default function R2CodePage() {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, userId } = useAuth();
   const { socket, isConnected } = useSocket();
 
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
@@ -548,32 +556,29 @@ export default function R2CodePage() {
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   // --- FIX: Wrapped triggerSessionEnd in useCallback ---
-  const triggerSessionEnd = useCallback(
-    (type: EndPopupData["type"], newRole: "elite" | "challenger") => {
-      if (!newRole) {
-        console.error(
-          "TriggerSessionEnd called without a new role. Aborting popup.",
-        );
-        showErrorToast(
-          "Could not determine next step. Redirecting to dashboard.",
-        );
-        const userRole =
-          (sessionStorage.getItem("r2_user_role") as "elite" | "challenger") ||
-          "challenger";
-        router.push(`/r2/${userRole}`);
-        return;
-      }
+  const goToRoleDashboard = useCallback(
+    (role: Round2Role) => {
+      persistRound2Role(role);
       sessionStorage.removeItem("r2_session_type");
       sessionStorage.removeItem("r2_context_id");
-      sessionStorage.setItem("r2_user_role", newRole);
-      setEndPopupData({ type, newRole });
-      setShowEndPopup(true);
+      router.push(round2RolePath(role));
     },
     [router],
   );
 
+  const triggerSessionEnd = useCallback(
+    (type: EndPopupData["type"], newRole: Round2Role) => {
+      persistRound2Role(newRole);
+      sessionStorage.removeItem("r2_session_type");
+      sessionStorage.removeItem("r2_context_id");
+      setEndPopupData({ type, newRole });
+      setShowEndPopup(true);
+    },
+    [],
+  );
+
   const safeTriggerSessionEnd = useCallback(
-    (type: EndPopupData["type"], newRole: "elite" | "challenger") => {
+    (type: EndPopupData["type"], newRole: Round2Role) => {
       if (sessionEndedRef.current) return;
 
       sessionEndedRef.current = true;
@@ -659,11 +664,11 @@ export default function R2CodePage() {
 
     const sessionType = sessionStorage.getItem("r2_session_type");
     const contextId = sessionStorage.getItem("r2_context_id");
-    const userRole = sessionStorage.getItem("r2_user_role") || "";
+    const userRole = readStoredRound2Role();
 
     if (!sessionType || !contextId) {
       showErrorToast("Session context is missing. Returning.");
-      router.push(userRole ? `/r2/${userRole}` : "/dashboard");
+      router.push(userRole ? round2RolePath(userRole) : "/r2/lobby");
       return;
     }
 
@@ -680,7 +685,7 @@ export default function R2CodePage() {
           }
         } else {
           showErrorToast(response.message || "Could not load session data.");
-          router.push(`/r2/${userRole}`);
+          router.push(userRole ? round2RolePath(userRole) : "/r2/lobby");
         }
         setPageIsLoading(false);
       },
@@ -690,6 +695,13 @@ export default function R2CodePage() {
   useEffect(() => {
     if (!socket || !session?.user?.email) return;
 
+    const viewerIds = [session.user.email, session.user.id, userId];
+
+    const roleFromEndEvent = (data?: { newRole?: string; role?: string }) =>
+      normalizeRound2Role(data?.newRole) ||
+      normalizeRound2Role(data?.role) ||
+      readStoredRound2Role();
+
     const handleRound2Redirect = ({
       target,
       reason,
@@ -698,22 +710,28 @@ export default function R2CodePage() {
       reason?: string;
     }) => {
       console.log("[ROUND2 REDIRECT]", { target, reason });
-
-      showErrorToast(reason || "You were removed from Round 2");
-
-      // hard reset local session
+      const role = normalizeRound2Role(target);
       sessionStorage.removeItem("r2_session_type");
       sessionStorage.removeItem("r2_context_id");
-      sessionStorage.removeItem("r2_user_role");
 
-      router.push("/r2" + target);
+      if (role) {
+        persistRound2Role(role);
+        if (sessionEndedRef.current) return;
+        router.push(round2RolePath(role));
+        return;
+      }
+
+      showErrorToast(reason || "You were removed from Round 2");
+      sessionStorage.removeItem("r2_user_role");
+      router.push("/dashboard");
     };
 
     const handleMatchResult = (data: MatchResultData) => {
-      const isWinner = data.winnerId === session.user.email;
+      const isWinner = viewerIds.some((id) =>
+        identitiesMatch(id, data.winnerId),
+      );
 
       let type: EndPopupData["type"];
-
       if (data.reason === "violation") {
         type = isWinner ? "opponent-violation" : "violation-forfeit";
       } else if (data.reason === "timeout") {
@@ -721,14 +739,12 @@ export default function R2CodePage() {
       } else {
         type = isWinner ? "win" : "lose";
       }
-      const newRole =
-        data.newRole ??
-        (sessionStorage.getItem("r2_user_role") as
-          | "elite"
-          | "challenger"
-          | null);
+
+      const newRole = roleFromEndEvent(data);
       if (!newRole) {
-        console.error("Could not determine new Round 2 role.");
+        console.error("Could not determine new Round 2 role.", data);
+        showErrorToast("Could not determine your Round 2 role.");
+        router.push("/r2/lobby");
         return;
       }
 
@@ -748,7 +764,15 @@ export default function R2CodePage() {
         type = "bounty-fail";
       }
 
-      safeTriggerSessionEnd(type, data.newRole);
+      const newRole = roleFromEndEvent(data);
+      if (!newRole) {
+        console.error("Could not determine bounty end role.", data);
+        showErrorToast("Could not determine your Round 2 role.");
+        router.push("/r2/lobby");
+        return;
+      }
+
+      safeTriggerSessionEnd(type, newRole);
     };
 
     const handleRoundEnd = () => {
@@ -762,27 +786,26 @@ export default function R2CodePage() {
       }, 3000);
     };
 
-    const handleViolationForfeit = () => {
-      console.warn("round2:violationForfeit received");
-
-      const userRole =
-        (sessionStorage.getItem("r2_user_role") as "elite" | "challenger") ||
-        "challenger";
-
-      safeTriggerSessionEnd("violation-forfeit", userRole);
+    const handleViolationForfeit = (data?: { newRole?: string }) => {
+      const newRole = roleFromEndEvent(data);
+      if (!newRole) {
+        router.push("/r2/lobby");
+        return;
+      }
+      safeTriggerSessionEnd("violation-forfeit", newRole);
     };
 
-    const handleOpponentViolated = () => {
-      console.warn("round2:opponentViolated received");
-
-      const userRole =
-        (sessionStorage.getItem("r2_user_role") as "elite" | "challenger") ||
-        "challenger";
-
-      safeTriggerSessionEnd("opponent-violation", userRole);
+    const handleOpponentViolated = (data?: { newRole?: string }) => {
+      const newRole = roleFromEndEvent(data);
+      if (!newRole) {
+        router.push("/r2/lobby");
+        return;
+      }
+      safeTriggerSessionEnd("opponent-violation", newRole);
     };
-    const handleRoleUpdate = (data: { newRole: "elite" | "challenger" }) => {
-      sessionStorage.setItem("r2_user_role", data.newRole);
+    const handleRoleUpdate = (data: { newRole?: string; role?: string }) => {
+      const role = roleFromEndEvent(data);
+      if (role) persistRound2Role(role);
     };
     const handleCooldown = (data: {
       duration?: number;
@@ -807,6 +830,8 @@ export default function R2CodePage() {
     socket.on("round2:adminAdded", handleAdminAdded);
     socket.on("round2:redirect", handleRound2Redirect);
     socket.on("round2:cooldown", handleCooldown);
+    socket.on("round2:violationForfeit", handleViolationForfeit);
+    socket.on("round2:opponentViolated", handleOpponentViolated);
 
     return () => {
       socket.off("round2:redirect", handleRound2Redirect);
@@ -826,7 +851,10 @@ export default function R2CodePage() {
     socket,
     router,
     session?.user?.email,
+    session?.user?.id,
+    userId,
     triggerSessionEnd,
+    safeTriggerSessionEnd,
     handleTimerUpdate,
     handleAdminRemoved,
     handleAdminAdded,
@@ -884,11 +912,11 @@ export default function R2CodePage() {
   useEffect(() => {
     if (showEndPopup && endPopupData?.newRole) {
       const timer = setTimeout(() => {
-        router.push(`/r2/${endPopupData.newRole}`);
+        goToRoleDashboard(endPopupData.newRole);
       }, 5000);
       return () => clearTimeout(timer);
     }
-  }, [showEndPopup, endPopupData, router]);
+  }, [showEndPopup, endPopupData, goToRoleDashboard]);
 
   if (pageIsLoading || !sessionData) {
     return <LoadingOverlay isLoading={true} message="Loading Session..." />;
@@ -1288,7 +1316,17 @@ export default function R2CodePage() {
               {popupContent.title}
             </h2>
             <p className="text-white text-lg mb-6">{popupContent.message}</p>
-            <p className="text-sm text-gray-400">Redirecting in 5 seconds...</p>
+            <p className="text-sm text-gray-400 mb-4">
+              Redirecting to your {endPopupData?.newRole} dashboard...
+            </p>
+            <button
+              onClick={() =>
+                endPopupData && goToRoleDashboard(endPopupData.newRole)
+              }
+              className="px-4 py-2 rounded bg-amber-600 text-black font-semibold hover:bg-amber-500"
+            >
+              Continue
+            </button>
           </div>
         </div>
       )}

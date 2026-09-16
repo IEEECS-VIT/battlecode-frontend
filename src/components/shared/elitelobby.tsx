@@ -14,6 +14,13 @@ import BountyQuestionCard, {
   BountyQuestion,
 } from "@/components/shared/BountyQuestionCard";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
+import {
+  hasLocalRound2Session,
+  normalizeRound2Role,
+  persistRound2Role,
+  readStoredRound2Role,
+  round2RolePath,
+} from "@/lib/round2Role";
 
 // --- Interfaces ---
 interface Participant {
@@ -179,7 +186,11 @@ export default function EliteDashboard() {
         return;
       }
 
-      const role = stateResponse.roundSpecific?.role;
+      const storedRole = readStoredRound2Role();
+      const role =
+        normalizeRound2Role(stateResponse.roundSpecific?.role) ||
+        normalizeRound2Role(stateResponse.currentUser?.role) ||
+        storedRole;
       const session = stateResponse.session;
       const bountyQuestions =
         stateResponse.roundSpecific?.bountyQuestions || [];
@@ -189,8 +200,7 @@ export default function EliteDashboard() {
       setUserRole(role);
       setHasActiveSession(!!session);
 
-      // If user has active session, redirect to code page
-      if (session) {
+      if (session && hasLocalRound2Session()) {
         clearTimeout(stateTimeout);
         setIsLoading(false);
         showInfoToast("Resuming your active session...");
@@ -200,23 +210,31 @@ export default function EliteDashboard() {
         return;
       }
 
-      // If user is not an elite, redirect
       if (role !== "elite") {
-        const expectedRole = sessionStorage.getItem("r2_user_role");
-        if (expectedRole === "elite" && !retriedStateRef.current) {
+        if (storedRole === "elite" && !retriedStateRef.current) {
           retriedStateRef.current = true;
           setTimeout(() => socket.emit("round2:getState"), 1500);
           return;
         }
-        clearTimeout(stateTimeout);
-        setIsLoading(false);
-        showErrorToast("Access denied. Redirecting...");
-        setTimeout(() => {
-          router.push(role ? `/r2/${role}` : "/dashboard");
-        }, 1000);
-        return;
+        if (storedRole === "elite") {
+          persistRound2Role("elite");
+          setUserRole("elite");
+        } else {
+          clearTimeout(stateTimeout);
+          setIsLoading(false);
+          if (role) {
+            persistRound2Role(role);
+            router.push(round2RolePath(role));
+            return;
+          }
+          showErrorToast("Access denied. Redirecting...");
+          setTimeout(() => router.push("/r2/lobby"), 1000);
+          return;
+        }
       }
 
+      persistRound2Role("elite");
+      setUserRole("elite");
       // User is an elite with no active session - set dashboard data from state
       setRoundEndTime(stateResponse.round?.endTime || null);
       if (stateResponse.currentUser?.cooldownEndTime) {
@@ -353,15 +371,21 @@ export default function EliteDashboard() {
 
       console.warn("[ELITE DASHBOARD REDIRECT]", { target, reason });
 
+      const role = normalizeRound2Role(target);
+      if (role === "elite") return;
+      if (role) {
+        persistRound2Role(role);
+        setIsRedirecting(true);
+        router.replace(round2RolePath(role));
+        return;
+      }
+
       setIsRedirecting(true);
       showErrorToast(reason || "You were removed from Round 2");
-
-      // clear session state
       sessionStorage.removeItem("r2_session_type");
       sessionStorage.removeItem("r2_context_id");
       sessionStorage.removeItem("r2_user_role");
       localStorage.removeItem("battlecode-round-2-code-store");
-
       router.replace("/dashboard");
     };
 

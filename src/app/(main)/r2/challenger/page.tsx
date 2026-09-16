@@ -14,6 +14,13 @@ import BountyQuestionCard, {
   BountyQuestion,
 } from "@/components/shared/BountyQuestionCard";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
+import {
+  hasLocalRound2Session,
+  normalizeRound2Role,
+  persistRound2Role,
+  readStoredRound2Role,
+  round2RolePath,
+} from "@/lib/round2Role";
 
 // --- Interfaces ---
 interface Participant {
@@ -94,7 +101,11 @@ export default function ChallengerDashboard() {
         return;
       }
 
-      const role = stateResponse.roundSpecific?.role;
+      const storedRole = readStoredRound2Role();
+      const role =
+        normalizeRound2Role(stateResponse.roundSpecific?.role) ||
+        normalizeRound2Role(stateResponse.currentUser?.role) ||
+        storedRole;
       const session = stateResponse.session;
       const bountyQuestions =
         stateResponse.roundSpecific?.bountyQuestions || [];
@@ -102,8 +113,10 @@ export default function ChallengerDashboard() {
       setUserRole(role);
       setHasActiveSession(!!session);
 
-      // If user has active session, redirect to code page
-      if (session) {
+      // Only resume a match if this client still has local session context.
+      // After match/bounty end those keys are cleared so a stale server
+      // session must not bounce us back to the code page.
+      if (session && hasLocalRound2Session()) {
         clearTimeout(stateTimeout);
         setIsLoading(false);
         showInfoToast("Resuming your active session...");
@@ -113,23 +126,31 @@ export default function ChallengerDashboard() {
         return;
       }
 
-      // If user is not a challenger, redirect
       if (role !== "challenger") {
-        const expectedRole = sessionStorage.getItem("r2_user_role");
-        if (expectedRole === "challenger" && !retriedStateRef.current) {
+        if (storedRole === "challenger" && !retriedStateRef.current) {
           retriedStateRef.current = true;
           setTimeout(() => socket.emit("round2:getState"), 1500);
           return;
         }
-        clearTimeout(stateTimeout);
-        setIsLoading(false);
-        showErrorToast("Access denied. Redirecting...");
-        setTimeout(() => {
-          router.push(role ? `/r2/${role}` : "/dashboard");
-        }, 1000);
-        return;
+        if (storedRole === "challenger") {
+          persistRound2Role("challenger");
+          setUserRole("challenger");
+        } else {
+          clearTimeout(stateTimeout);
+          setIsLoading(false);
+          if (role) {
+            persistRound2Role(role);
+            router.push(round2RolePath(role));
+            return;
+          }
+          showErrorToast("Access denied. Redirecting...");
+          setTimeout(() => router.push("/r2/lobby"), 1000);
+          return;
+        }
       }
 
+      persistRound2Role("challenger");
+      setUserRole("challenger");
       // User is a challenger with no active session - set dashboard data from state
       setRoundEndTime(stateResponse.round?.endTime || null);
       if (stateResponse.currentUser?.cooldownEndTime) {
@@ -216,9 +237,21 @@ export default function ChallengerDashboard() {
 
       if (isRedirecting) return;
 
-      setIsRedirecting(true);
+      const role = normalizeRound2Role(target);
+      if (role === "challenger") return;
+      if (role) {
+        persistRound2Role(role);
+        setIsRedirecting(true);
+        router.replace(round2RolePath(role));
+        return;
+      }
 
-      if (target === "lobby") {
+      if (
+        target === "lobby" ||
+        target === "/lobby" ||
+        target === "/dashboard"
+      ) {
+        setIsRedirecting(true);
         showInfoToast(reason || "You have been removed from Round 2");
         router.replace("/dashboard");
       }
