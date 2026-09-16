@@ -22,6 +22,7 @@ import {
 import CustomScrollbar from "@/components/shared/CustomScrollbar";
 import SecureWrapper from "@/components/shared/SecureWrapper";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
+import ExpandableTestCase from "@/components/shared/ExpandableTestCase";
 
 // Interfaces
 interface MatchData {
@@ -533,13 +534,6 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
           : "",
   });
 
-  const formatTestCaseData = (data: unknown): string => {
-    if (typeof data === "string") return data;
-    if (typeof data === "object" && data !== null)
-      return JSON.stringify(data, null, 2);
-    return String(data);
-  };
-
   // Constants
   const monaco = useMonaco();
   const editorOptions = {
@@ -742,23 +736,23 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
                     {problem.sampleTestCases.map((tc, i) => (
                       <div
                         key={i}
-                        className="mb-4 bg-black/20 border-amber-600/50 mr-2 border-2 p-3 rounded font-mono text-sm"
+                        className="mb-4 min-w-0 overflow-hidden bg-black/20 border-amber-600/50 mr-2 border-2 p-3 rounded font-mono text-sm"
                       >
                         <p className="font-bold text-gray-400">Input:</p>
-                        <pre className="bg-gray-800/60 p-2 rounded mt-1 whitespace-pre-wrap">
-                          {formatTestCaseData(
-                            tc.stdin || tc.input?.stdin || tc.input?.json || "",
-                          )}
-                        </pre>
+                        <ExpandableTestCase
+                          value={
+                            tc.stdin || tc.input?.stdin || tc.input?.json || ""
+                          }
+                        />
                         <p className="mt-2 font-bold text-gray-400">Output:</p>
-                        <pre className="bg-gray-800/60 p-2 rounded mt-1 whitespace-pre-wrap">
-                          {formatTestCaseData(
+                        <ExpandableTestCase
+                          value={
                             tc.expected_output ||
-                              tc.output?.stdout ||
-                              tc.output?.json ||
-                              "",
-                          )}
-                        </pre>
+                            tc.output?.stdout ||
+                            tc.output?.json ||
+                            ""
+                          }
+                        />
                         {tc.explanation && (
                           <p className="mt-2 text-xs text-gray-400 italic">
                             Explanation: {tc.explanation}
@@ -888,7 +882,7 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
                         problem.sampleTestCases.map((tc, i) => (
                           <div
                             key={i}
-                            className="border border-gray-600 rounded-lg p-3 bg-black/20"
+                            className="min-w-0 overflow-hidden border border-gray-600 rounded-lg p-3 bg-black/20"
                           >
                             <h4 className="font-semibold text-amber-400">
                               Case {i + 1}
@@ -898,27 +892,27 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
                                 <p className="text-sm font-medium text-gray-300 mb-1">
                                   Input:
                                 </p>
-                                <pre className="bg-gray-800/60 p-2 rounded text-sm font-mono overflow-x-auto border border-gray-700">
-                                  {formatTestCaseData(
+                                <ExpandableTestCase
+                                  value={
                                     tc.stdin ||
-                                      tc.input?.stdin ||
-                                      tc.input?.json ||
-                                      "",
-                                  )}
-                                </pre>
+                                    tc.input?.stdin ||
+                                    tc.input?.json ||
+                                    ""
+                                  }
+                                />
                               </div>
                               <div>
                                 <p className="text-sm font-medium text-gray-300 mb-1">
                                   Expected Output:
                                 </p>
-                                <pre className="bg-gray-800/60 p-2 rounded text-sm font-mono overflow-x-auto border border-gray-700">
-                                  {formatTestCaseData(
+                                <ExpandableTestCase
+                                  value={
                                     tc.expected_output ||
-                                      tc.output?.stdout ||
-                                      tc.output?.json ||
-                                      "",
-                                  )}
-                                </pre>
+                                    tc.output?.stdout ||
+                                    tc.output?.json ||
+                                    ""
+                                  }
+                                />
                               </div>
                             </div>
                           </div>

@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
 import SecureWrapper from "@/components/shared/SecureWrapper";
+import ExpandableTestCase from "@/components/shared/ExpandableTestCase";
 
 // --- Interfaces ---
 interface Problem {
@@ -1209,12 +1210,6 @@ export default function Round3Page() {
     `${Math.floor(seconds / 60)
       .toString()
       .padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
-  const formatTestCaseData = (data: unknown): string => {
-    if (typeof data === "string") return data;
-    if (typeof data === "object" && data !== null)
-      return JSON.stringify(data, null, 2);
-    return String(data);
-  };
   const getSaveStatusDisplay = () => {
     if (!currentContext || isLocked)
       return { text: "", className: "", icon: null };
@@ -1378,23 +1373,23 @@ export default function Round3Page() {
                   {currentProblem.sampleTestCases.map((tc, i) => (
                     <div
                       key={i}
-                      className="mb-4 bg-black/20 border-amber-600/50 mr-2 border-2 p-3 rounded font-mono text-sm"
+                      className="mb-4 min-w-0 overflow-hidden bg-black/20 border-amber-600/50 mr-2 border-2 p-3 rounded font-mono text-sm"
                     >
                       <p className="font-bold text-gray-400">Input:</p>
-                      <pre className="bg-gray-800/60 p-2 rounded mt-1 whitespace-pre-wrap">
-                        {formatTestCaseData(
-                          tc.stdin || tc.input?.stdin || tc.input?.json || "",
-                        )}
-                      </pre>
+                      <ExpandableTestCase
+                        value={
+                          tc.stdin || tc.input?.stdin || tc.input?.json || ""
+                        }
+                      />
                       <p className="mt-2 font-bold text-gray-400">Output:</p>
-                      <pre className="bg-gray-800/60 p-2 rounded mt-1 whitespace-pre-wrap">
-                        {formatTestCaseData(
+                      <ExpandableTestCase
+                        value={
                           tc.expected_output ||
-                            tc.output?.stdout ||
-                            tc.output?.json ||
-                            "",
-                        )}
-                      </pre>
+                          tc.output?.stdout ||
+                          tc.output?.json ||
+                          ""
+                        }
+                      />
                       {tc.explanation && (
                         <p className="mt-2 text-xs text-gray-400 italic">
                           Explanation: {tc.explanation}
@@ -1566,27 +1561,27 @@ export default function Round3Page() {
                         <label className="text-gray-400 font-sans font-bold">
                           Input:
                         </label>
-                        <pre className="bg-black/40 p-2 rounded mt-1 whitespace-pre-wrap">
-                          {formatTestCaseData(
+                        <ExpandableTestCase
+                          value={
                             currentProblem.sampleTestCases[activeTestCaseTab]
                               ?.stdin ||
-                              currentProblem.sampleTestCases[activeTestCaseTab]
-                                ?.input?.stdin ||
-                              "",
-                          )}
-                        </pre>
+                            currentProblem.sampleTestCases[activeTestCaseTab]
+                              ?.input?.stdin ||
+                            ""
+                          }
+                        />
                         <label className="text-gray-400 font-sans font-bold mt-3 block">
                           Expected Output:
                         </label>
-                        <pre className="bg-black/40 p-2 rounded mt-1 whitespace-pre-wrap">
-                          {formatTestCaseData(
+                        <ExpandableTestCase
+                          value={
                             currentProblem.sampleTestCases[activeTestCaseTab]
                               ?.expected_output ||
-                              currentProblem.sampleTestCases[activeTestCaseTab]
-                                ?.output?.stdout ||
-                              "",
-                          )}
-                        </pre>
+                            currentProblem.sampleTestCases[activeTestCaseTab]
+                              ?.output?.stdout ||
+                            ""
+                          }
+                        />
                       </div>
                     </div>
                   </div>

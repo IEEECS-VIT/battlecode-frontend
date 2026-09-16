@@ -20,6 +20,7 @@ import {
 } from "@/components/shared/CustomToast";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
 import SecureWrapper from "@/components/shared/SecureWrapper";
+import ExpandableTestCase from "@/components/shared/ExpandableTestCase";
 
 interface Problem {
   id: string;
@@ -1140,26 +1141,26 @@ export default function CodePage({
                     {currentProblem.sampleTestCases.map((testCase, i) => (
                       <div
                         key={i}
-                        className="mb-4 bg-black/20 border-amber-600/50 mr-2 border-2 p-3 rounded font-mono text-sm"
+                        className="mb-4 min-w-0 overflow-hidden bg-black/20 border-amber-600/50 mr-2 border-2 p-3 rounded font-mono text-sm"
                       >
                         <p className="font-bold text-gray-400">Input:</p>
-                        <pre className="bg-gray-800/60 p-2 rounded mt-1 whitespace-pre-wrap">
-                          {formatTestCaseData(
+                        <ExpandableTestCase
+                          value={
                             testCase.stdin ||
-                              testCase.input?.stdin ||
-                              testCase.input?.json ||
-                              "",
-                          )}
-                        </pre>
+                            testCase.input?.stdin ||
+                            testCase.input?.json ||
+                            ""
+                          }
+                        />
                         <p className="mt-2 font-bold text-gray-400">Output:</p>
-                        <pre className="bg-gray-800/60 p-2 rounded mt-1 whitespace-pre-wrap">
-                          {formatTestCaseData(
+                        <ExpandableTestCase
+                          value={
                             testCase.expected_output ||
-                              testCase.output?.stdout ||
-                              testCase.output?.json ||
-                              "",
-                          )}
-                        </pre>
+                            testCase.output?.stdout ||
+                            testCase.output?.json ||
+                            ""
+                          }
+                        />
                         {testCase.explanation && (
                           <p className="mt-2 text-xs text-gray-400 italic">
                             Explanation: {testCase.explanation}
@@ -1350,28 +1351,28 @@ export default function CodePage({
                                   <p className="text-sm font-medium text-gray-300 mb-1">
                                     Input:
                                   </p>
-                                  <pre className="bg-gray-800/60 p-2 rounded text-sm font-mono overflow-x-auto border border-gray-700">
-                                    {formatTestCaseData(
+                                  <ExpandableTestCase
+                                    value={
                                       testCase.stdin ||
-                                        testCase.input?.stdin ||
-                                        testCase.input?.json ||
-                                        "",
-                                    )}
-                                  </pre>
+                                      testCase.input?.stdin ||
+                                      testCase.input?.json ||
+                                      ""
+                                    }
+                                  />
                                 </div>
 
                                 <div>
                                   <p className="text-sm font-medium text-gray-300 mb-1">
                                     Expected Output:
                                   </p>
-                                  <pre className="bg-gray-800/60 p-2 rounded text-sm font-mono overflow-x-auto border border-gray-700">
-                                    {formatTestCaseData(
+                                  <ExpandableTestCase
+                                    value={
                                       testCase.expected_output ||
-                                        testCase.output?.stdout ||
-                                        testCase.output?.json ||
-                                        "",
-                                    )}
-                                  </pre>
+                                      testCase.output?.stdout ||
+                                      testCase.output?.json ||
+                                      ""
+                                    }
+                                  />
                                 </div>
 
                                 {testCase.explanation && (
