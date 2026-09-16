@@ -35,6 +35,10 @@ interface TestCase {
 
 interface TimerData {
   timeRemaining?: number;
+  duration?: number;
+  elapsed?: number;
+  startTime?: number;
+  endTime?: number;
 }
 
 interface RoundEndData {
@@ -134,7 +138,8 @@ export default function R0Code() {
   const [problems, setProblems] = useState<Problem[]>([]);
   const [currentProblemIndex, setCurrentProblemIndex] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(0);
-  const [roundDuration, setRoundDuration] = useState(600);
+  const [roundEndTime, setRoundEndTime] = useState<number | null>(null);
+  const [roundDuration, setRoundDuration] = useState(1_200_000);
   const [isRoundActive, setIsRoundActive] = useState(false);
   const [pageIsLoading, setPageIsLoading] = useState(true);
 
@@ -165,8 +170,37 @@ export default function R0Code() {
       "[Socket Listeners] Setting up socket event listeners for round0",
     );
 
+    const applyDeadline = (
+      source?: TimerData | StateResponse["round"] | StateResponse["session"],
+    ) => {
+      if (!source || !isMountedRef.current) return;
+      if (
+        typeof source.endTime === "number" &&
+        Number.isFinite(source.endTime)
+      ) {
+        setRoundEndTime(source.endTime);
+      } else if (
+        "duration" in source &&
+        typeof source.startTime === "number" &&
+        typeof source.duration === "number"
+      ) {
+        setRoundEndTime(source.startTime + source.duration);
+      } else if (
+        "elapsed" in source &&
+        "duration" in source &&
+        typeof source.duration === "number" &&
+        typeof source.elapsed === "number"
+      ) {
+        setRoundEndTime(
+          Date.now() + Math.max(0, source.duration - source.elapsed),
+        );
+      } else if ((source.timeRemaining ?? 0) > 0) {
+        setRoundEndTime(Date.now() + source.timeRemaining!);
+      }
+    };
+
     const handleTimerUpdate = (data: TimerData) => {
-      if (isMountedRef.current) setTimeRemaining(data.timeRemaining || 0);
+      applyDeadline(data);
     };
 
     const handleRoundEnd = (data: RoundEndData) => {
@@ -310,13 +344,14 @@ export default function R0Code() {
         const { problems: initialProblems, duration, startTime } = storedData;
 
         setProblems(initialProblems);
-        setRoundDuration(duration);
+        setRoundDuration(duration || 1_200_000);
         if (initialProblems.length > 0) {
           setCurrentProblem(initialProblems[0]);
           setCurrentProblemIndex(0);
         }
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        setTimeRemaining(Math.max(duration - elapsed, 0));
+        if (typeof startTime === "number") {
+          setRoundEndTime(startTime + (duration || 1_200_000));
+        }
         setIsRoundActive(true);
         setPageIsLoading(false);
         return; // Success, no need to fetch
@@ -335,9 +370,15 @@ export default function R0Code() {
         if (response?.session?.problem && response?.round?.isActive) {
           setCurrentProblem(response.session.problem);
           setCurrentProblemIndex(response.session.currentProblemIndex || 0);
-          setTimeRemaining(response.session.timeRemaining || 0);
+          if (response.round.endTime) {
+            setRoundEndTime(response.round.endTime);
+          } else if (response.round.startTime && response.round.duration) {
+            setRoundEndTime(response.round.startTime + response.round.duration);
+          } else if ((response.session.timeRemaining ?? 0) > 0) {
+            setRoundEndTime(Date.now() + response.session.timeRemaining);
+          }
           setProblems(response.session.problems || [response.session.problem]);
-          setRoundDuration(response.round.duration || 600);
+          setRoundDuration(response.round.duration || 1_200_000);
           setIsRoundActive(true);
         } else {
           const errorMessage = response?.error || "No active round found.";
@@ -368,6 +409,17 @@ export default function R0Code() {
     socket.emit("round0:getState");
   }, [isAuthLoading, isSocketLoading, user, socket, isConnected, router]);
 
+  useEffect(() => {
+    if (!roundEndTime) return;
+    const tick = () =>
+      setTimeRemaining(
+        Math.max(0, Math.ceil((roundEndTime - Date.now()) / 1000)),
+      );
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [roundEndTime]);
+
   // --- User Action Handlers ---
   const handleNextQuestion = async () => {
     if (!socket || !isConnected) {
@@ -385,7 +437,9 @@ export default function R0Code() {
         if (response.problemIndex !== undefined)
           setCurrentProblemIndex(response.problemIndex);
 
-        setTimeRemaining(response.timeRemaining || 0);
+        if ((response.timeRemaining ?? 0) > 0) {
+          setRoundEndTime(Date.now() + response.timeRemaining!);
+        }
 
         showSuccessToast(
           `Moved to question ${(response.problemIndex ?? 0) + 1}`,

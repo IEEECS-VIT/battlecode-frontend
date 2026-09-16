@@ -23,6 +23,7 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useSocket } from "@/contexts/SocketContext";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
+import CustomScrollbar from "@/components/shared/CustomScrollbar";
 import { BaseRoundState, Participant } from "@/types/roundState";
 
 interface RoundStatus {
@@ -38,6 +39,23 @@ interface CurrentRoundData {
   rounds: RoundStatus[];
 }
 
+interface LeaderboardEntry {
+  rank: number;
+  id: string;
+  name: string;
+  username: string;
+  score: number;
+  currentRound: number;
+  regNo: string;
+  trend: string;
+}
+
+type LeaderboardPayload = {
+  success?: boolean;
+  error?: string;
+  leaderboard?: LeaderboardEntry[];
+};
+
 const TIMER_DRIFT_SECONDS = 2;
 
 type TimerSource = {
@@ -45,10 +63,26 @@ type TimerSource = {
   startTime?: number | null;
   duration?: number | null;
   timeRemaining?: number | null;
+  elapsed?: number | null;
 };
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function deadlineFromSource(source?: TimerSource | null): number | null {
+  if (!source) return null;
+  if (isPositiveNumber(source.endTime)) return source.endTime;
+  if (isPositiveNumber(source.startTime) && isPositiveNumber(source.duration)) {
+    return source.startTime + source.duration;
+  }
+  if (isPositiveNumber(source.duration) && isPositiveNumber(source.elapsed)) {
+    return Date.now() + Math.max(0, source.duration - source.elapsed);
+  }
+  if (isPositiveNumber(source.timeRemaining)) {
+    return Date.now() + source.timeRemaining;
+  }
+  return null;
 }
 
 function resolveDeadlineFromResponse(response: {
@@ -57,86 +91,39 @@ function resolveDeadlineFromResponse(response: {
   startTime?: number;
   duration?: number;
   timeRemaining?: number;
-  roundSpecific?: { globalTimeRemaining?: number };
+  elapsed?: number;
+  endTime?: number;
 }): number | null {
-  const roundNumber = response.roundNumber;
-  const round = response.round;
-
-  // Round 1 never sends endTime. Whole-round clock is remaining seconds.
-  if (roundNumber === 1) {
-    const remainingSeconds = isPositiveNumber(round?.timeRemaining)
-      ? round.timeRemaining
-      : isPositiveNumber(response.roundSpecific?.globalTimeRemaining)
-        ? response.roundSpecific.globalTimeRemaining
-        : null;
-    if (remainingSeconds != null) {
-      return Date.now() + remainingSeconds * 1000;
-    }
-    if (
-      isPositiveNumber(round?.startTime) &&
-      isPositiveNumber(round?.duration)
-    ) {
-      return round.startTime + round.duration;
-    }
-    return null;
-  }
-
-  // Rounds 0 / 2 / 3: prefer the absolute end timestamp (ms).
-  if (isPositiveNumber(round?.endTime)) {
-    return round.endTime;
-  }
-
-  // Round 2 remaining + duration are already milliseconds.
-  if (roundNumber === 2) {
-    if (isPositiveNumber(round?.timeRemaining)) {
-      return Date.now() + round.timeRemaining;
-    }
-    if (
-      isPositiveNumber(round?.startTime) &&
-      isPositiveNumber(round?.duration)
-    ) {
-      return round.startTime + round.duration;
-    }
-    return null;
-  }
-
-  // Round 0 can send timeRemaining: 0 while still IN_PROGRESS. Ignore that 0.
-  if (isPositiveNumber(round?.startTime) && isPositiveNumber(round?.duration)) {
-    const durationMs =
-      round.duration >= 10_000 ? round.duration : round.duration * 1000;
-    return round.startTime + durationMs;
-  }
-
-  if (isPositiveNumber(round?.timeRemaining)) {
-    return Date.now() + round.timeRemaining * 1000;
-  }
-
-  // lobby:round0 still puts remaining seconds on the packet root.
-  if (isPositiveNumber(response.timeRemaining)) {
-    return Date.now() + response.timeRemaining * 1000;
-  }
-
-  return null;
+  return (
+    deadlineFromSource(response.round) ??
+    deadlineFromSource({
+      endTime: response.endTime,
+      startTime: response.startTime,
+      duration: response.duration,
+      timeRemaining: response.timeRemaining,
+      elapsed: response.elapsed,
+    })
+  );
 }
 
 function hasAbsoluteDeadline(
-  roundNumber: number | undefined,
+  _roundNumber: number | undefined,
   round?: TimerSource | null,
 ): boolean {
-  if (roundNumber === 1) return false;
   return isPositiveNumber(round?.endTime);
 }
 
 function resolveTimerTickEndTime(
-  roundNumber: number,
-  data: { timeRemaining?: number; endTime?: number },
+  _roundNumber: number,
+  data: {
+    timeRemaining?: number;
+    endTime?: number;
+    duration?: number;
+    elapsed?: number;
+    startTime?: number;
+  },
 ): number | null {
-  if (isPositiveNumber(data.endTime)) return data.endTime;
-  if (!isPositiveNumber(data.timeRemaining)) return null;
-  if (roundNumber === 2) {
-    return Date.now() + data.timeRemaining;
-  }
-  return Date.now() + data.timeRemaining * 1000;
+  return deadlineFromSource(data);
 }
 
 function shouldCorrectTimer(
@@ -147,6 +134,26 @@ function shouldCorrectTimer(
   const localRemaining = Math.floor((localEndTime - Date.now()) / 1000);
   const serverRemaining = Math.floor((serverEndTime - Date.now()) / 1000);
   return Math.abs(serverRemaining - localRemaining) > TIMER_DRIFT_SECONDS;
+}
+
+function hasBackendOpponent(
+  user: Pick<Participant, "opponentUsername">,
+): boolean {
+  const opponent = user.opponentUsername?.trim();
+  return Boolean(opponent && opponent !== "undefined");
+}
+
+function isPairedInMatch(user: Participant): boolean {
+  const inMatch = user.status === "in_match" || user.status === "in-match";
+  return inMatch && hasBackendOpponent(user);
+}
+
+function activeUserStatusLabel(user: Participant): string {
+  if (isPairedInMatch(user)) return "In Match";
+  if (user.status === "in_match" || user.status === "in-match")
+    return "Playing";
+  if (user.status === "in_bounty") return "Bounty";
+  return "Waiting";
 }
 
 export default function Admin() {
@@ -160,10 +167,11 @@ export default function Admin() {
   const [showEndRoundConfirm, setShowEndRoundConfirm] = useState(false);
   const [roundToEnd, setRoundToEnd] = useState<number | null>(null);
   const [showResetRedisConfirm, setShowResetRedisConfirm] = useState(false);
+  const [showResetUsersConfirm, setShowResetUsersConfirm] = useState(false);
   const [matchParticipants, setMatchParticipants] = useState<Participant[]>([]);
   const [selectedRoundForMatches, setSelectedRoundForMatches] = useState(0);
-  const [qualifyCount, setQualifyCount] = useState<number>(0);
-  const [qualifyLoading, setQualifyLoading] = useState(false);
+  const [qualifyCount, setQualifyCount] = useState<number | "">("");
+  const [isQualifying, setIsQualifying] = useState(false);
 
   // Helper functions for localStorage persistence
   const saveParticipantsToStorage = useCallback(
@@ -236,6 +244,8 @@ export default function Admin() {
   const [isRoundActive, setIsRoundActive] = useState(false);
   const [currentUser, setCurrentUser] = useState<Participant | null>(null);
   const [allParticipants, setAllParticipants] = useState<Participant[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardLocked, setLeaderboardLocked] = useState(false);
 
   const { socket } = useSocket();
   const router = useRouter();
@@ -273,6 +283,53 @@ export default function Admin() {
       socket.off("admin:error", handleAdminError); // <-- ADD THIS
     };
   }, [socket]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const applyLeaderboard = (data: LeaderboardPayload) => {
+      if (data?.success === false) {
+        setLeaderboardLocked(true);
+        return;
+      }
+      if (Array.isArray(data?.leaderboard)) {
+        setLeaderboard(data.leaderboard);
+        setLeaderboardLocked(false);
+      }
+    };
+
+    const requestLeaderboard = () => {
+      socket.emit("user:leaderboard", applyLeaderboard);
+    };
+
+    socket.on("server:leaderboard", applyLeaderboard);
+    socket.on("connect", requestLeaderboard);
+    socket.on("admin:reset:success", requestLeaderboard);
+    requestLeaderboard();
+
+    return () => {
+      socket.off("server:leaderboard", applyLeaderboard);
+      socket.off("connect", requestLeaderboard);
+      socket.off("admin:reset:success", requestLeaderboard);
+    };
+  }, [socket]);
+
+  useEffect(() => {
+    if (!socket || !currentRoundData) return;
+    const locked =
+      currentRoundData.currentRoundNumber === 3 &&
+      currentRoundData.currentRoundStatus !== "LOCKED";
+    if (locked) {
+      setLeaderboardLocked(true);
+      return;
+    }
+    setLeaderboardLocked(false);
+    socket.emit("user:leaderboard");
+  }, [
+    socket,
+    currentRoundData?.currentRoundNumber,
+    currentRoundData?.currentRoundStatus,
+  ]);
 
   const addUserToRound = async (userEmail: string, roundNumber: number) => {
     console.log("[ADMIN ACTION] Adding user to round:", {
@@ -404,9 +461,13 @@ export default function Admin() {
               : prev,
           );
         }
-        // Use roundSpecific for Round 1's nextMatchmakingCycle
         setNextMatchmakingCycle(
-          response.roundSpecific?.nextMatchmakingCycle ?? null,
+          response.roundSpecific?.nextMatchmakingCycle != null
+            ? Math.max(
+                0,
+                Math.ceil(response.roundSpecific.nextMatchmakingCycle / 1000),
+              )
+            : null,
         );
         if (currentUser) {
           console.log("[SOCKET STATE] Current user:", currentUser);
@@ -455,37 +516,20 @@ export default function Admin() {
           total: activeUsers.length,
         });
 
-        // Client-side opponent matching: If opponentUsername is undefined, match users by pairs
-        const activeUsersWithOpponents = activeUsers.map((user, index) => {
-          // If backend already provided opponentUsername and it's not "undefined", use it
-          if (user.opponentUsername && user.opponentUsername !== "undefined") {
-            return user;
-          }
-
-          // Client-side matching: pair users in order (0-1, 2-3, etc.)
-          if (user.status === "in_match") {
-            const isEvenIndex = index % 2 === 0;
-            const opponentIndex = isEvenIndex ? index + 1 : index - 1;
-            const opponent = activeUsers[opponentIndex];
-
-            if (opponent && opponent.status === "in_match") {
-              return {
-                ...user,
-                opponentUsername: opponent.username,
-              };
-            }
-          }
-
-          return user;
-        });
+        // Only keep an opponent when the backend sent one. Do not invent pairs.
+        const activeUsersFromBackend = activeUsers.map((user) =>
+          hasBackendOpponent(user)
+            ? user
+            : { ...user, opponentUsername: undefined },
+        );
 
         console.log(
           "[SOCKET STATE] Setting match participants:",
-          activeUsersWithOpponents.length,
+          activeUsersFromBackend.length,
         );
-        setMatchParticipants(activeUsersWithOpponents);
+        setMatchParticipants(activeUsersFromBackend);
         // Save to localStorage
-        saveMatchParticipantsToStorage(activeUsersWithOpponents, roundNumber);
+        saveMatchParticipantsToStorage(activeUsersFromBackend, roundNumber);
       } else {
         if (!round.isActive && roundNumber === selectedRoundForMatches) {
           console.log(
@@ -707,29 +751,60 @@ export default function Admin() {
     resetAllRedis();
   };
 
-  const handleQualifyRound3 = () => {
+  const resetUsers = () => {
     if (!socket) {
       showErrorToast("Socket not connected");
       return;
     }
 
+    socket.emit(
+      "admin:resetUsers",
+      {},
+      (response: { success?: boolean; error?: string }) => {
+        if (response?.success) {
+          showSuccessToast(
+            "Reset all player and admin scores, R2 roles, and R3 qualification",
+          );
+          socket.emit("user:leaderboard");
+        } else {
+          showErrorToast(response?.error || "Failed to reset users");
+        }
+      },
+    );
+    setShowResetUsersConfirm(false);
+  };
+
+  const handleResetUsersClick = () => {
+    setShowResetUsersConfirm(true);
+  };
+
+  const handleCancelResetUsers = () => {
+    setShowResetUsersConfirm(false);
+  };
+
+  const handleConfirmResetUsers = () => {
+    resetUsers();
+  };
+
+  const handleQualifyR3 = () => {
     if (!qualifyCount || qualifyCount <= 0) {
-      showErrorToast("Enter a valid number of users to qualify");
+      showErrorToast("Please enter a valid number of players");
       return;
     }
 
-    setQualifyLoading(true);
-
-    socket.emit(
+    setIsQualifying(true);
+    socket?.emit(
       "admin:qualifyRound3",
-      { count: qualifyCount },
-      (response: { success: boolean; error?: string }) => {
-        setQualifyLoading(false);
-
+      { count: Number(qualifyCount) },
+      (response: any) => {
+        setIsQualifying(false);
         if (response?.success) {
-          showSuccessToast(`Top ${qualifyCount} users qualified for Round 3`);
+          showSuccessToast(
+            `Successfully qualified top ${qualifyCount} players for Round 3!`,
+          );
+          setQualifyCount("");
         } else {
-          showErrorToast(response?.error || "Failed to qualify users");
+          showErrorToast(response?.error || "Failed to qualify players");
         }
       },
     );
@@ -908,6 +983,13 @@ export default function Admin() {
       ? currentRoundData.currentRoundNumber
       : null);
 
+  const isR3LeaderboardLocked =
+    currentRoundData?.currentRoundNumber === 3 &&
+    currentRoundData?.currentRoundStatus !== "LOCKED";
+  const showLeaderboardLocked = currentRoundData
+    ? isR3LeaderboardLocked
+    : leaderboardLocked;
+
   // After refresh, ask the active round for its deadline instead of only the default tab (round 0)
   useEffect(() => {
     if (!socket || inProgressRoundNumber == null) return;
@@ -943,6 +1025,17 @@ export default function Admin() {
     };
 
     const handleLobbyUpdate1 = (data: BaseRoundState) => {
+      if (activeRoundNumber === 1) {
+        const lobbyDeadline = resolveDeadlineFromResponse({
+          ...data,
+          roundNumber: 1,
+        });
+        if (lobbyDeadline != null) {
+          setRoundEndTime((prev) =>
+            shouldCorrectTimer(prev, lobbyDeadline) ? lobbyDeadline : prev,
+          );
+        }
+      }
       if (1 === selectedRoundForUsers) {
         console.log("[LOBBY UPDATE Round 1]", data);
         if (data.participants?.byStatus?.lobby) {
@@ -965,6 +1058,17 @@ export default function Admin() {
     };
 
     const handleLobbyUpdate3 = (data: BaseRoundState) => {
+      if (activeRoundNumber === 3) {
+        const lobbyDeadline = resolveDeadlineFromResponse({
+          ...data,
+          roundNumber: 3,
+        });
+        if (lobbyDeadline != null) {
+          setRoundEndTime((prev) =>
+            shouldCorrectTimer(prev, lobbyDeadline) ? lobbyDeadline : prev,
+          );
+        }
+      }
       if (3 === selectedRoundForUsers) {
         console.log("[LOBBY UPDATE Round 3]", data);
         if (data.participants?.byStatus?.lobby) {
@@ -1116,30 +1220,50 @@ export default function Admin() {
       );
     };
 
-    const handleTimer0 = (data: { timeRemaining?: number; endTime?: number }) =>
-      applyTimerTick(0, data);
+    const handleTimer0 = (data: {
+      timeRemaining?: number;
+      endTime?: number;
+      duration?: number;
+      elapsed?: number;
+      startTime?: number;
+    }) => applyTimerTick(0, data);
     const handleGlobalTimer = (data: {
       timeRemaining?: number;
       endTime?: number;
     }) => applyTimerTick(1, data);
-    const handleTimer3 = (data: { timeRemaining?: number; endTime?: number }) =>
-      applyTimerTick(3, data);
+    const handleTimer3 = (data: {
+      timeRemaining?: number;
+      endTime?: number;
+      duration?: number;
+      elapsed?: number;
+      startTime?: number;
+    }) => applyTimerTick(3, data);
 
     const handleMatchmakingCycle = (data: { nextCycle: number }) => {
       if (activeRoundNumber === 1) {
-        setNextMatchmakingCycle(data.nextCycle);
+        setNextMatchmakingCycle(Math.max(0, Math.ceil(data.nextCycle / 1000)));
       }
+    };
+
+    const handleRound1Ended = (data: { endTime?: number }) => {
+      if (activeRoundNumber !== 1) return;
+      if (typeof data.endTime === "number" && Number.isFinite(data.endTime)) {
+        setRoundEndTime(data.endTime);
+      }
+      setGlobalTimeRemaining(0);
     };
 
     socket.on("round0:timer", handleTimer0);
     socket.on("round1:globalTimer", handleGlobalTimer);
     socket.on("round1:matchmakingCycle", handleMatchmakingCycle);
+    socket.on("round1:ended", handleRound1Ended);
     socket.on("round3:timer", handleTimer3);
 
     return () => {
       socket.off("round0:timer", handleTimer0);
       socket.off("round1:globalTimer", handleGlobalTimer);
       socket.off("round1:matchmakingCycle", handleMatchmakingCycle);
+      socket.off("round1:ended", handleRound1Ended);
       socket.off("round3:timer", handleTimer3);
     };
   }, [socket, activeRoundNumber]);
@@ -1171,7 +1295,7 @@ export default function Admin() {
     const updateTimer = () => {
       const remaining = Math.max(
         0,
-        Math.floor((roundEndTime - Date.now()) / 1000),
+        Math.ceil((roundEndTime - Date.now()) / 1000),
       );
       setGlobalTimeRemaining(remaining);
     };
@@ -1230,17 +1354,105 @@ export default function Admin() {
             </div>
           )}
 
+          {/* Reset Users Confirmation Modal */}
+          {showResetUsersConfirm && (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4">
+              <div className="bg-gray-900 border-2 border-red-500 rounded-lg p-6 max-w-lg w-full">
+                <h3 className="text-xl font-bold text-red-500 mb-2">
+                  Confirm Reset Users
+                </h3>
+                <p className="text-red-200 text-sm mb-4">
+                  Postgres User rows only. Redis is not touched.
+                </p>
+                <div className="text-white text-sm space-y-3 mb-6">
+                  <div>
+                    <p className="font-semibold text-red-300 mb-1">Clears</p>
+                    <ul className="list-disc list-inside text-gray-200 space-y-1">
+                      <li>
+                        Every user (players and admins):{" "}
+                        <span className="font-mono">eventScore = 0</span>
+                      </li>
+                      <li>
+                        <span className="font-mono">round2Role = null</span>
+                      </li>
+                      <li>
+                        <span className="font-mono">
+                          qualifiedForR3 = false
+                        </span>
+                      </li>
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-gray-300 mb-1">
+                      Does not change
+                    </p>
+                    <ul className="list-disc list-inside text-gray-400 space-y-1">
+                      <li>
+                        PLAYER/ADMIN <span className="font-mono">role</span>
+                      </li>
+                      <li>Submissions, round statuses, problems</li>
+                      <li>Anything in Redis (live matches, lobbies, etc.)</li>
+                    </ul>
+                  </div>
+                  <p className="text-gray-400">
+                    Zeroes scores and Round 2/R3 flags in the DB. Use Reset
+                    Redis too if you want a clean live-game slate.
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleConfirmResetUsers}
+                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-medium transition-all"
+                  >
+                    Yes, Reset Users
+                  </button>
+                  <button
+                    onClick={handleCancelResetUsers}
+                    className="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded font-medium transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Reset Redis Confirmation Modal */}
           {showResetRedisConfirm && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4">
-              <div className="bg-gray-900 border-2 border-yellow-500 rounded-lg p-6 max-w-md w-full">
-                <h3 className="text-xl font-bold text-yellow-500 mb-4">
+              <div className="bg-gray-900 border-2 border-yellow-500 rounded-lg p-6 max-w-lg w-full">
+                <h3 className="text-xl font-bold text-yellow-500 mb-2">
                   Confirm Reset Redis
                 </h3>
-                <p className="text-white mb-6">
-                  Are you sure you want to reset Redis for ALL rounds? This will
-                  clear all cached data for all rounds (0, 1, 2, 3).
+                <p className="text-yellow-200 text-sm mb-4">
+                  Redis only. Postgres is not touched.
                 </p>
+                <div className="text-white text-sm space-y-3 mb-6">
+                  <div>
+                    <p className="font-semibold text-yellow-300 mb-1">
+                      Clears (FLUSHDB — all keys in this Redis DB)
+                    </p>
+                    <ul className="list-disc list-inside text-gray-200 space-y-1">
+                      <li>Round 0–3 live state, lobbies, and matches</li>
+                      <li>Bounties, cooldowns, submit locks</li>
+                      <li>Cached leaderboard data</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-gray-300 mb-1">
+                      Does not change
+                    </p>
+                    <ul className="list-disc list-inside text-gray-400 space-y-1">
+                      <li>User scores, Round 2 roles, R3 qualification</li>
+                      <li>Submissions, round statuses, problems in Postgres</li>
+                    </ul>
+                  </div>
+                  <p className="text-gray-400">
+                    Wipes in-memory / live game state, then rebroadcasts the
+                    current round. Use Reset Users too if you also want scores
+                    and flags zeroed.
+                  </p>
+                </div>
                 <div className="flex gap-3">
                   <button
                     onClick={handleConfirmResetRedis}
@@ -1383,6 +1595,49 @@ export default function Admin() {
               })}
             </div>
 
+            {/* Automated R3 Qualification Card */}
+            <div className="mt-6 bg-gray-800/80 border border-orange-500/30 rounded-lg p-5">
+              <h4 className="text-orange-400 font-bold mb-3 text-lg">
+                Automate R3 Qualification
+              </h4>
+              <p className="text-sm text-gray-300 mb-4">
+                Enter the number of top players to automatically qualify based
+                on their current event score.
+              </p>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-4">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-gray-400 mb-1">
+                    Number of Top Players (X)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={qualifyCount}
+                    onChange={(e) =>
+                      setQualifyCount(
+                        e.target.value ? parseInt(e.target.value) : "",
+                      )
+                    }
+                    className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-orange-500 transition-colors"
+                    placeholder="e.g., 40"
+                  />
+                </div>
+                <button
+                  onClick={handleQualifyR3}
+                  disabled={isQualifying || !qualifyCount}
+                  className={`px-6 py-2 rounded font-medium transition-all duration-200 whitespace-nowrap
+                    ${
+                      isQualifying || !qualifyCount
+                        ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+                        : "bg-orange-600 text-white hover:bg-orange-500 hover:scale-105 shadow-lg shadow-orange-500/20"
+                    }
+                  `}
+                >
+                  {isQualifying ? "Processing..." : "Qualify Players"}
+                </button>
+              </div>
+            </div>
+
             <div className="mt-6 text-sm text-gray-400 bg-gray-800/50 rounded-lg p-4">
               <h4 className="text-orange-400 font-medium mb-2">
                 Status Transitions:
@@ -1484,45 +1739,6 @@ export default function Admin() {
               </div>
             </div>
 
-            {/* Qualify Users for Round 3 */}
-            <div className="mt-8 bg-gray-800/50 rounded-lg p-6 border border-green-500/50">
-              <h4 className="text-green-400 font-medium mb-4">
-                Qualify Users for Round 3
-              </h4>
-
-              <p className="text-gray-300 text-sm mb-4">
-                Select how many top users (by leaderboard score) should qualify
-                for Round 3. This will{" "}
-                <span className="text-red-400 font-semibold">
-                  overwrite previous qualifications
-                </span>
-                .
-              </p>
-
-              <div className="flex flex-col md:flex-row gap-4 items-center">
-                <input
-                  type="number"
-                  min={1}
-                  placeholder="Number of users (e.g. 20)"
-                  value={qualifyCount || ""}
-                  onChange={(e) => setQualifyCount(parseInt(e.target.value))}
-                  className="w-full md:w-64 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white text-sm"
-                />
-
-                <button
-                  onClick={handleQualifyRound3}
-                  disabled={qualifyLoading || !socket}
-                  className={`px-6 py-2 rounded font-medium text-white transition-all ${
-                    qualifyLoading || !socket
-                      ? "bg-gray-600 cursor-not-allowed opacity-50"
-                      : "bg-green-600 hover:bg-green-500 hover:scale-105"
-                  }`}
-                >
-                  {qualifyLoading ? "Qualifying..." : "Qualify for Round 3"}
-                </button>
-              </div>
-            </div>
-
             {/* End Round Section */}
             <div className="mt-8 bg-gray-800/50 rounded-lg p-6">
               <h4 className="text-orange-400 font-medium mb-4">
@@ -1569,8 +1785,32 @@ export default function Admin() {
                 </button>
               </div>
               <p className="text-xs text-gray-400 mt-3 text-center">
-                Note: This will reset the Redis data for all rounds (0, 1, 2,
-                3).
+                Redis only (FLUSHDB). Wipes live game state. Does not change
+                Postgres scores or R2/R3 flags.
+              </p>
+            </div>
+
+            {/* Reset Users Section */}
+            <div className="mt-8 bg-gray-800/50 rounded-lg p-6">
+              <h4 className="text-orange-400 font-medium mb-4">
+                Reset User Controls
+              </h4>
+              <div className="flex justify-center">
+                <button
+                  onClick={handleResetUsersClick}
+                  disabled={!socket}
+                  className={`px-6 py-3 rounded text-sm font-medium transition-all ${
+                    !socket
+                      ? "bg-gray-600 cursor-not-allowed opacity-50"
+                      : "bg-red-600 hover:bg-red-500 hover:scale-105"
+                  } text-white`}
+                >
+                  Reset Users
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mt-3 text-center">
+                Postgres only. Zeroes eventScore, clears round2Role and
+                qualifiedForR3. Does not change Redis or PLAYER/ADMIN role.
               </p>
             </div>
 
@@ -1698,33 +1938,30 @@ export default function Admin() {
                         {matchParticipants.length !== 1 ? "s" : ""}
                       </p>
                       <div className="max-h-96 overflow-y-auto space-y-2">
-                        {matchParticipants.map((participant, idx) => (
-                          <div
-                            key={`match-${participant.userId}-${idx}`}
-                            className={`bg-gray-600/50 px-4 py-3 rounded border-l-4 ${
-                              participant.status === "in_match"
-                                ? "border-blue-500"
-                                : "border-yellow-500"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                <div
-                                  className={`w-2 h-2 rounded-full ${
-                                    participant.status === "in_match"
-                                      ? "bg-blue-500"
-                                      : "bg-yellow-500"
-                                  }`}
-                                ></div>
-                                <div className="flex flex-col">
-                                  <span className="text-white font-medium">
-                                    {/* FIX: Add fallbacks so names don't show up blank */}
-                                    {participant.username ||
-                                      participant.userId ||
-                                      "Unknown"}
-                                  </span>
-                                  {participant.status === "in_match" &&
-                                    participant.opponentUsername && (
+                        {matchParticipants.map((participant, idx) => {
+                          const paired = isPairedInMatch(participant);
+                          return (
+                            <div
+                              key={`match-${participant.userId}-${idx}`}
+                              className={`bg-gray-600/50 px-4 py-3 rounded border-l-4 ${
+                                paired ? "border-blue-500" : "border-yellow-500"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <div
+                                    className={`w-2 h-2 rounded-full ${
+                                      paired ? "bg-blue-500" : "bg-yellow-500"
+                                    }`}
+                                  ></div>
+                                  <div className="flex flex-col">
+                                    <span className="text-white font-medium">
+                                      {/* FIX: Add fallbacks so names don't show up blank */}
+                                      {participant.username ||
+                                        participant.userId ||
+                                        "Unknown"}
+                                    </span>
+                                    {paired && participant.opponentUsername && (
                                       <span className="text-sm text-blue-300 mt-1">
                                         🎮 vs{" "}
                                         <span className="font-semibold text-blue-200">
@@ -1732,22 +1969,19 @@ export default function Admin() {
                                         </span>
                                       </span>
                                     )}
+                                  </div>
                                 </div>
+                                <span
+                                  className={`text-xs font-semibold uppercase ${
+                                    paired ? "text-blue-400" : "text-yellow-400"
+                                  }`}
+                                >
+                                  {activeUserStatusLabel(participant)}
+                                </span>
                               </div>
-                              <span
-                                className={`text-xs font-semibold uppercase ${
-                                  participant.status === "in_match"
-                                    ? "text-blue-400"
-                                    : "text-yellow-400"
-                                }`}
-                              >
-                                {participant.status === "in_match"
-                                  ? "In Match"
-                                  : "Waiting"}
-                              </span>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   ) : (
@@ -1759,61 +1993,87 @@ export default function Admin() {
               </div>
             </div>
 
-            {/* Leaderboard Section (using match participants for consistency) */}
+            {/* Event-wide leaderboard from server:leaderboard */}
             <div className="mt-8 bg-gray-800/50 rounded-lg p-6">
-              <div className="flex items-center mb-4">
-                <img
-                  src="/leaderboard-img.svg"
-                  alt="Leaderboard Icon"
-                  width={16}
-                  height={16}
-                />
-                <p className="text-2xl text-orange-500 ml-2">
-                  Round {selectedRoundForMatches} Participants
+              <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+                <div className="flex items-center">
+                  <img
+                    src="/leaderboard-img.svg"
+                    alt="Leaderboard Icon"
+                    width={16}
+                    height={16}
+                  />
+                  <p className="text-2xl text-orange-500 ml-2">
+                    Live Leaderboard
+                  </p>
+                </div>
+                <p className="text-sm text-gray-400">
+                  {leaderboard.length}{" "}
+                  {leaderboard.length === 1 ? "player" : "players"}
                 </p>
               </div>
-              <div className="overflow-x-auto">
-                {Array.isArray(matchParticipants) &&
-                matchParticipants.length > 0 ? (
+              {showLeaderboardLocked && (
+                <p className="text-sm text-yellow-400 mb-4">
+                  Leaderboard updates are locked while Round 3 is live. Showing
+                  the last received list.
+                </p>
+              )}
+              <CustomScrollbar className="max-h-[32rem] overflow-y-auto overflow-x-auto">
+                {leaderboard.length > 0 ? (
                   <table className="w-full text-left text-sm text-white">
-                    <thead>
+                    <thead className="sticky top-0 bg-gray-800">
                       <tr className="border-b border-gray-700">
-                        <th className="py-2 px-3 font-bold">#</th>
+                        <th className="py-2 px-3 font-bold">Rank</th>
                         <th className="py-2 px-3 font-bold">Player</th>
                         <th className="py-2 px-3 font-bold">Score</th>
-                        <th className="py-2 px-3 font-bold">Status</th>
+                        <th className="py-2 px-3 font-bold">Round</th>
+                        <th className="py-2 px-3 font-bold">Reg No</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {matchParticipants.map((p, idx) => (
+                      {leaderboard.map((entry, idx) => (
                         <tr
-                          key={`${p.userId}-${idx}`}
+                          key={entry.id || idx}
                           className="border-gray-800 hover:bg-white/5 transition"
                         >
-                          <td className="py-2 px-3">{idx + 1}</td>
-                          <td className="py-2 px-3 max-w-[100px] truncate">
-                            {p.username}
+                          <td className="py-2 px-3">{entry.rank}</td>
+                          <td className="py-2 px-3">
+                            <div className="flex flex-col">
+                              <span className="font-medium">
+                                {entry.username && entry.username !== "Not Set"
+                                  ? entry.username
+                                  : entry.name || "Unknown"}
+                              </span>
+                              {entry.username &&
+                                entry.username !== "Not Set" &&
+                                entry.name && (
+                                  <span className="text-xs text-gray-400">
+                                    {entry.name}
+                                  </span>
+                                )}
+                            </div>
                           </td>
                           <td className="py-2 px-3 font-mono text-cyan-400">
-                            {p.eventScore ?? 0}
+                            {entry.score}
                           </td>
-                          <td className="py-2 px-3 text-sm">
-                            {p.status === "in_match" || p.status === "in-match"
-                              ? "In-match"
-                              : "Waiting"}
+                          <td className="py-2 px-3">{entry.currentRound}</td>
+                          <td className="py-2 px-3 text-gray-300">
+                            {entry.regNo || "—"}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 ) : (
-                  <div className="flex items-center justify-center h-full text-gray-400">
+                  <div className="flex items-center justify-center py-8 text-gray-400">
                     <p>
-                      No active participants in Round {selectedRoundForMatches}.
+                      {showLeaderboardLocked
+                        ? "Leaderboard is locked during Round 3."
+                        : "Waiting for leaderboard..."}
                     </p>
                   </div>
                 )}
-              </div>
+              </CustomScrollbar>
             </div>
           </div>
         </div>

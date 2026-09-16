@@ -303,11 +303,7 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
 
       if (currentContext) {
         const currentCode = codeRef.current;
-        const boilerplate = contextManager.getBoilerplate(
-          problem,
-          currentContext.language,
-        );
-        if (currentCode && currentCode !== boilerplate) {
+        if (currentCode) {
           updatedStore = contextManager.setCodeForContext(
             updatedStore,
             currentContext,
@@ -321,19 +317,24 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
         updatedStore,
         newContext,
       );
-      const newBoilerplate = contextManager.getBoilerplate(
-        newProblem,
-        newLanguage,
-      );
+      const codeToSet = savedCode || "";
 
       setCodeStore(updatedStore);
-      setCode(savedCode || newBoilerplate);
+      setCode(codeToSet);
       setCurrentContext(newContext);
       setSubmissionResults(null);
       setActiveTab("testcases");
     },
     [currentContext, problem, codeStore, contextManager],
   );
+
+  const handleLanguageChange = (newLanguage: string) => {
+    if (newLanguage === language) return;
+    setLanguage(newLanguage);
+    if (problem) {
+      handleContextTransition(problem, newLanguage);
+    }
+  };
 
   const executeCode = useCallback(
     async (isFinalSubmission: boolean) => {
@@ -394,7 +395,20 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
             total: (result.results || []).length,
           };
 
-          if (isFinalSubmission) {
+          const status = isFinalSubmission
+            ? result.submission?.status
+            : result.summary?.status;
+
+          if (
+            status === "TIME_LIMIT_EXCEEDED" ||
+            status === "MEMORY_LIMIT_EXCEEDED"
+          ) {
+            showErrorToast(
+              status === "MEMORY_LIMIT_EXCEEDED"
+                ? "Memory Limit Exceeded"
+                : "Time Limit Exceeded",
+            );
+          } else if (isFinalSubmission) {
             if (result.submission?.status !== "ACCEPTED") {
               showErrorToast(
                 `${summary.passed}/${summary.total} test cases passed.`,
@@ -555,8 +569,7 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
       loadedStore,
       initialContext,
     );
-    const boilerplate = contextManager.getBoilerplate(problemData, language);
-    setCode(savedCode || boilerplate);
+    setCode(savedCode || "");
     setProblem(problemData);
     setIsContextInitialized(true);
   }, [matchData, language, isContextInitialized, contextManager]);
@@ -765,7 +778,7 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
               <div className="flex justify-between items-center mb-2 gap-2">
                 <select
                   value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
+                  onChange={(e) => handleLanguageChange(e.target.value)}
                   className="bg-black text-white p-2 rounded border w-32 border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-500"
                 >
                   <option value="python">Python</option>
@@ -1032,6 +1045,13 @@ export default function R1CodePage() {
     if (storedDataRaw) {
       try {
         const data: MatchData = JSON.parse(storedDataRaw);
+        if (
+          !data.endTime &&
+          typeof data.timeRemaining === "number" &&
+          data.timeRemaining > 0
+        ) {
+          data.endTime = Date.now() + data.timeRemaining;
+        }
         setMatchData(data);
         setPageIsLoading(false); // Success! We have data, no need to ask the server.
         return; // Exit the effect early.
@@ -1101,6 +1121,7 @@ export default function R1CodePage() {
             hints: response.session.problem?.hints || [],
           },
           startTime: response.session.startTime,
+          endTime: response.session.endTime,
           duration: response.session.endTime - response.session.startTime,
         };
         sessionStorage.setItem("round1_match_data", JSON.stringify(data));
@@ -1113,40 +1134,32 @@ export default function R1CodePage() {
     });
   }, [isAuthLoading, isConnected, socket, router]);
 
-  // Client-side timer for UI updates and as a fallback for match end.
+  const matchEndTime =
+    matchData &&
+    (matchData.endTime ||
+      (matchData.startTime
+        ? matchData.startTime + (matchData.duration || 0)
+        : 0));
+
+  // Client-side timer from a stable endTime. Do not depend on matchData —
+  // timerUpdate used to replace that object every second and restart this effect.
   useEffect(() => {
-    if (!matchData) return;
+    if (!matchEndTime) return;
 
-    // Handle both old format (startTime + duration) and new unified schema (endTime)
-    const endTime =
-      matchData.endTime || matchData.startTime + (matchData.duration || 0);
-
-    console.log("[TIMER INIT]", {
-      startTime: matchData.startTime,
-      duration: matchData.duration,
-      endTime: matchData.endTime,
-      calculatedEndTime: endTime,
-      now: Date.now(),
-    });
-
-    const timerInterval = setInterval(() => {
-      const remainingMs = endTime - Date.now();
-      if (remainingMs <= 0) {
-        setTimeRemaining(0);
-        clearInterval(timerInterval);
-
-        if (!showMatchEndPopup && !matchEndedRef.current) {
-          console.log("[CLIENT TIMER] Match timed out");
-          matchEndedRef.current = true;
-          setMatchEndData({ type: "timeout" });
-          setShowMatchEndPopup(true);
-        }
-      } else {
-        setTimeRemaining(Math.floor(remainingMs / 1000));
+    const tick = () => {
+      const remainingMs = matchEndTime - Date.now();
+      setTimeRemaining(Math.max(0, Math.ceil(remainingMs / 1000)));
+      if (remainingMs <= 0 && !showMatchEndPopup && !matchEndedRef.current) {
+        matchEndedRef.current = true;
+        setMatchEndData({ type: "timeout" });
+        setShowMatchEndPopup(true);
       }
-    }, 1000);
+    };
+
+    tick();
+    const timerInterval = setInterval(tick, 1000);
     return () => clearInterval(timerInterval);
-  }, [matchData, showMatchEndPopup]);
+  }, [matchEndTime, showMatchEndPopup]);
 
   // Listens for authoritative match/round end events from the server.
   useEffect(() => {
@@ -1185,7 +1198,7 @@ export default function R1CodePage() {
       setShowMatchEndPopup(true);
     };
 
-    const handleRoundEnd = () => {
+    const handleRoundEnd = (_data?: { endTime?: number }) => {
       sessionStorage.removeItem("round1_match_data");
       sessionStorage.removeItem("fullscreen_violations"); // Clear violations on round end
 
@@ -1260,14 +1273,29 @@ export default function R1CodePage() {
       );
     };
 
+    const handleTimerUpdate = (data: {
+      timeRemaining?: number;
+      endTime?: number;
+    }) => {
+      if (typeof data.endTime !== "number" || !Number.isFinite(data.endTime)) {
+        return;
+      }
+      setMatchData((prev) => {
+        if (!prev || prev.endTime === data.endTime) return prev;
+        return { ...prev, endTime: data.endTime };
+      });
+    };
+
     socket.on("round1:matchEnd", handleMatchEnd);
     socket.on("round1:ended", handleRoundEnd);
+    socket.on("round1:timerUpdate", handleTimerUpdate);
     socket.on("round1:adminRemoved", handleAdminRemoved);
     socket.on("round1:adminAdded", handleAdminAdded);
 
     return () => {
       socket.off("round1:matchEnd", handleMatchEnd);
       socket.off("round1:ended", handleRoundEnd);
+      socket.off("round1:timerUpdate", handleTimerUpdate);
       socket.off("round1:adminRemoved", handleAdminRemoved);
       socket.off("round1:adminAdded", handleAdminAdded);
     };

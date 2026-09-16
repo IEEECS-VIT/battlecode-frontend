@@ -3,6 +3,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEffect, useState, useCallback } from "react";
 import { useSocket } from "@/contexts/SocketContext";
+import SponsoredBy from "@/components/shared/SponsoredBy";
 
 const Hero = () => {
   const router = useRouter();
@@ -107,7 +108,7 @@ const Hero = () => {
         </div>
 
         <div className="containerContent flex flex-col items-center justify-center h-full ">
-          <div className="flex items-center justify-center h-[20%]">
+          <div className="relative flex items-center justify-center h-20 lg:h-28">
             <div className="z-1 absolute jusify-items items-center flex drop-shadow-[0_px_4px_#000]">
               <h1 className="text-4xl lg:text-8xl z-1 tracking-wide px-8 font-medium stickyMask text-shadow-heading">
                 BATTLECODE
@@ -125,79 +126,14 @@ const Hero = () => {
               </h1>
             </div>
           </div>
-          <div className="relative mt-4 flex items-center justify-center">
-            <span
-              className="uppercase font-medium
-      text-[2.2rem] lg:text-[2.75rem]
-      stickyMask text-shadow-heading
-      flex items-center gap-[0.05em]"
-            >
-              .Powered&nbsp;by&nbsp;Judge
-            </span>
-
-            <svg
-              opacity={0.7}
-              viewBox="0 0 60 90"
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-[2.2rem] lg:h-[2.75rem] w-auto inline-block judge-zero"
-              aria-hidden
-            >
-              <defs>
-                <linearGradient
-                  id="judgeZeroGradient"
-                  x1="0"
-                  y1="0"
-                  x2="0"
-                  y2="1"
-                >
-                  <stop offset="0%" stopColor="#FDBA74" />
-                  <stop offset="55%" stopColor="#F97316" />
-                  <stop offset="100%" stopColor="#C2410C" />
-                </linearGradient>
-
-                <mask id="judgeZeroNoise">
-                  <rect width="100%" height="100%" fill="white" />
-                  <image
-                    href="/mask.svg"
-                    width="140"
-                    height="140"
-                    preserveAspectRatio="xMidYMid slice"
-                    opacity="0.55"
-                  />
-                </mask>
-              </defs>
-
-              {/* outer zero – slimmer */}
-              <rect
-                x="14"
-                y="4"
-                width="32"
-                height="82"
-                rx="10"
-                fill="url(#judgeZeroGradient)"
-                mask="url(#judgeZeroNoise)"
-              />
-
-              {/* inner cutout */}
-              <rect x="19" y="12" width="22" height="66" rx="7" fill="black" />
-
-              {/* center dot */}
-              <circle
-                cx="30"
-                cy="45"
-                r="4"
-                fill="url(#judgeZeroGradient)"
-                mask="url(#judgeZeroNoise)"
-              />
-            </svg>
-          </div>
+          <SponsoredBy />
 
           <div className="relative "></div>
 
           <button
             onClick={handleAuthClick}
             disabled={isLoading}
-            className="hidden lg:block relative gradient-border-button text-white uppercase tracking-wider hover:tracking-widest duration-[350ms] ease-out font-medium text-md mt-8"
+            className="hidden lg:block relative gradient-border-button text-white uppercase tracking-wider hover:tracking-widest duration-[350ms] ease-out font-medium text-md mt-6"
           >
             {isLoading
               ? "LOADING..."

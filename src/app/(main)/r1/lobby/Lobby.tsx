@@ -165,6 +165,7 @@ export default function Lobbyr1() {
 
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [isRoundActive, setIsRoundActive] = useState(false);
+  const [roundEndTime, setRoundEndTime] = useState<number | null>(null);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [roundStarted, setRoundStarted] = useState(false);
@@ -176,6 +177,19 @@ export default function Lobbyr1() {
   >(null);
 
   const isAdmin = userRole === "ADMIN";
+
+  const applyRoundEndTime = (round?: {
+    endTime?: number | null;
+    timeRemaining?: number | null;
+  }) => {
+    if (typeof round?.endTime === "number" && Number.isFinite(round.endTime)) {
+      setRoundEndTime(round.endTime);
+    } else if (round && (round.timeRemaining ?? 0) > 0) {
+      setRoundEndTime(Date.now() + (round.timeRemaining as number));
+    } else if (round) {
+      setRoundEndTime(null);
+    }
+  };
 
   // Functions
   const formatTime = (seconds: number) =>
@@ -214,11 +228,7 @@ export default function Lobbyr1() {
       }
 
       setIsRoundActive(response.round?.isActive ?? false);
-
-      // Update time remaining if available
-      if (response.round?.timeRemaining !== undefined) {
-        setTimeRemaining(response.round.timeRemaining);
-      }
+      applyRoundEndTime(response.round);
 
       if (response.currentUser) {
         if (response.currentUser.status === "in_match") {
@@ -334,14 +344,13 @@ export default function Lobbyr1() {
       if (data.round?.isActive !== undefined) {
         setIsRoundActive(data.round.isActive);
       }
-      if (data.round?.timeRemaining !== undefined) {
-        setTimeRemaining(data.round.timeRemaining);
-      }
+      applyRoundEndTime(data.round);
     };
 
-    const handleRoundStarted = () => {
+    const handleRoundStarted = (data?: LobbyData) => {
       setRoundStarted(true);
       setIsRoundActive(true);
+      applyRoundEndTime(data?.round);
       localStorage.removeItem("battlecode-round-1-code-store");
       showSuccessToast("Round 1 has started! Entering matchmaking...");
       setTimeout(() => router.push("/r1/waiting"), 2000);
@@ -354,11 +363,15 @@ export default function Lobbyr1() {
       setTimeout(() => router.push("/r1/code"), 1500);
     };
 
-    const handleGlobalTimer = (data: { timeRemaining: number }) => {
-      setTimeRemaining(data.timeRemaining);
+    const handleGlobalTimer = (data: {
+      timeRemaining?: number;
+      endTime?: number;
+    }) => {
+      applyRoundEndTime(data);
     };
 
-    const handleRoundEnd = () => {
+    const handleRoundEnd = (data?: { endTime?: number }) => {
+      applyRoundEndTime(data);
       showSuccessToast("Round 1 has ended.");
       router.push("/dashboard");
     };
@@ -418,6 +431,17 @@ export default function Lobbyr1() {
       socket.off("round1:adminAdded", handleAdminAdded);
     };
   }, [socket, router, currentRoundData]);
+
+  useEffect(() => {
+    if (!roundEndTime || !isRoundActive) return;
+    const updateTimer = () =>
+      setTimeRemaining(
+        Math.max(0, Math.ceil((roundEndTime - Date.now()) / 1000)),
+      );
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [roundEndTime, isRoundActive]);
 
   // Early return
   if (authLoading || !authenticationChecked || isCheckingRound) {

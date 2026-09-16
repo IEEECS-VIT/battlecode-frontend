@@ -82,6 +82,16 @@ export default function Dashboard() {
 
       setIsLocked(newLockedStatus);
 
+      // Hide leaderboard while R3 is in progress or all rounds (0-3) are COMPLETED
+      const allRoundsCompleted = [0, 1, 2, 3].every((n) => {
+        const round = data.rounds.find((r) => r.roundNumber === n);
+        return round?.status === "COMPLETED";
+      });
+      const round3 = data.rounds.find((r) => r.roundNumber === 3);
+      const round3InProgress = round3?.status === "IN_PROGRESS";
+
+      setShowLeaderboard(!round3InProgress && !allRoundsCompleted);
+
       if (isClient) {
         localStorage.setItem("battlecode_rounds", JSON.stringify(data));
         localStorage.setItem(
@@ -325,26 +335,6 @@ export default function Dashboard() {
     handleCurrentRound,
     handleAdminAdded,
   ]);
-
-  // Round 3 visibility check
-  useEffect(() => {
-    if (!socket || !isConnected) return;
-
-    const handleRound3Check = (data: CurrentRoundData) => {
-      if (data.currentRoundNumber === 3) {
-        setShowLeaderboard(false);
-      } else {
-        setShowLeaderboard(true);
-      }
-    };
-
-    socket.on("server:currentRound", handleRound3Check);
-    socket.emit("user:current-round");
-
-    return () => {
-      socket.off("server:currentRound", handleRound3Check);
-    };
-  }, [socket, isConnected]);
 
   return (
     <>

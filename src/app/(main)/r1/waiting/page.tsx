@@ -44,7 +44,9 @@ interface MatchFoundData {
   opponent: { userId: string; username: string; rank?: number };
   question: { id: string; title: string };
   startTime: number;
+  endTime: number;
   duration: number;
+  timeRemaining: number;
 }
 
 interface GetStateResponse {
@@ -103,12 +105,35 @@ export default function WaitingRoomR1() {
   const [allParticipants, setAllParticipants] = useState<Participant[]>([]);
   const [currentUser, setCurrentUser] = useState<Participant | null>(null);
   const [isRoundActive, setIsRoundActive] = useState(false);
+  const [roundEndTime, setRoundEndTime] = useState<number | null>(null);
   const [globalTimeRemaining, setGlobalTimeRemaining] = useState(0);
   const [cooldownTimeRemaining, setCooldownTimeRemaining] = useState(0);
+  const [nextCycleEndTime, setNextCycleEndTime] = useState<number | null>(null);
   const [nextMatchmakingCycle, setNextMatchmakingCycle] = useState<
     number | null
   >(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const applyRoundEndTime = (round?: {
+    endTime?: number | null;
+    timeRemaining?: number | null;
+  }) => {
+    if (typeof round?.endTime === "number" && Number.isFinite(round.endTime)) {
+      setRoundEndTime(round.endTime);
+    } else if (round && (round.timeRemaining ?? 0) > 0) {
+      setRoundEndTime(Date.now() + (round.timeRemaining as number));
+    } else if (round) {
+      setRoundEndTime(null);
+    }
+  };
+
+  const applyNextCycle = (nextCycleMs?: number | null) => {
+    if (typeof nextCycleMs === "number" && Number.isFinite(nextCycleMs)) {
+      setNextCycleEndTime(Date.now() + Math.max(0, nextCycleMs));
+    } else {
+      setNextCycleEndTime(null);
+    }
+  };
 
   const isAdmin = useMemo(() => userRole === "ADMIN", [userRole]);
   const isInCooldown = useMemo(
@@ -202,15 +227,9 @@ export default function WaitingRoomR1() {
         }
 
         setIsRoundActive(response.round?.isActive ?? false);
-        setGlobalTimeRemaining(
-          response.roundSpecific?.globalTimeRemaining ||
-            response.round?.timeRemaining ||
-            0,
-        );
+        applyRoundEndTime(response.round);
         setAllParticipants(response.participants?.all || []);
-        setNextMatchmakingCycle(
-          response.roundSpecific?.nextMatchmakingCycle || null,
-        );
+        applyNextCycle(response.roundSpecific?.nextMatchmakingCycle);
 
         const me = response.currentUser;
         if (me) {
@@ -251,8 +270,12 @@ export default function WaitingRoomR1() {
       router.push("/r1/code");
     };
 
-    const handleGlobalTimer = (data: { timeRemaining: number }) =>
-      setGlobalTimeRemaining(data.timeRemaining);
+    const handleGlobalTimer = (data: {
+      timeRemaining?: number;
+      endTime?: number;
+    }) => {
+      applyRoundEndTime(data);
+    };
 
     const handleParticipantsUpdate = (
       data: BaseRoundState | { participants: Participant[] },
@@ -271,6 +294,13 @@ export default function WaitingRoomR1() {
       }
 
       setAllParticipants(participantsList);
+      if ("round" in data) {
+        const unified = data as BaseRoundState;
+        applyRoundEndTime(unified.round);
+        if (unified.roundSpecific?.nextMatchmakingCycle != null) {
+          applyNextCycle(unified.roundSpecific.nextMatchmakingCycle);
+        }
+      }
       const me = participantsList.find((p) => p.userId === userId);
       if (me) {
         setCurrentUser(me);
@@ -300,18 +330,20 @@ export default function WaitingRoomR1() {
       setCooldownTimeRemaining(0);
     };
 
-    const handleRoundStarted = () => {
+    const handleRoundStarted = (data?: GetStateResponse) => {
       showSuccessToast("Round 1 has started!");
       setIsRoundActive(true);
+      applyRoundEndTime(data?.round);
     };
 
-    const handleRoundEnd = () => {
+    const handleRoundEnd = (data?: { endTime?: number }) => {
+      applyRoundEndTime(data);
       showInfoToast("Round 1 has ended.");
       router.push("/dashboard");
     };
 
     const handleMatchmakingCycle = (data: { nextCycle: number }) => {
-      setNextMatchmakingCycle(data.nextCycle);
+      applyNextCycle(data.nextCycle);
     };
 
     const handleAdminRemoved = () => {
@@ -429,35 +461,26 @@ export default function WaitingRoomR1() {
   }, [currentUser, cooldownTimeRemaining]);
 
   useEffect(() => {
-    if (!isRoundActive || globalTimeRemaining <= 0) return;
-
-    const globalTimerInterval = setInterval(() => {
-      setGlobalTimeRemaining((prev) => {
-        const newTime = Math.max(0, prev - 1);
-        return newTime;
-      });
-    }, 1000);
-
-    return () => clearInterval(globalTimerInterval);
-  }, [isRoundActive, globalTimeRemaining]);
+    if (!isRoundActive || !roundEndTime) return;
+    const updateTimer = () =>
+      setGlobalTimeRemaining(
+        Math.max(0, Math.ceil((roundEndTime - Date.now()) / 1000)),
+      );
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [isRoundActive, roundEndTime]);
 
   useEffect(() => {
-    if (
-      !isRoundActive ||
-      nextMatchmakingCycle === null ||
-      nextMatchmakingCycle <= 0
-    )
-      return;
-
-    const matchmakingTimerInterval = setInterval(() => {
-      setNextMatchmakingCycle((prev) => {
-        if (prev === null || prev <= 0) return prev;
-        return Math.max(0, prev - 1);
-      });
-    }, 1000);
-
-    return () => clearInterval(matchmakingTimerInterval);
-  }, [isRoundActive, nextMatchmakingCycle]);
+    if (!isRoundActive || nextCycleEndTime == null) return;
+    const updateTimer = () =>
+      setNextMatchmakingCycle(
+        Math.max(0, Math.ceil((nextCycleEndTime - Date.now()) / 1000)),
+      );
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [isRoundActive, nextCycleEndTime]);
 
   // Early return
   if (authLoading || isLoading) {

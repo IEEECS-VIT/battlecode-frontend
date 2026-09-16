@@ -30,6 +30,18 @@ interface Participant {
 interface LobbyData {
   participants?: Participant[];
   isActive?: boolean;
+  timeRemaining?: number;
+  duration?: number;
+  elapsed?: number;
+  startTime?: number;
+  endTime?: number;
+  round?: {
+    isActive?: boolean;
+    startTime?: number | null;
+    endTime?: number | null;
+    timeRemaining?: number;
+    duration?: number;
+  };
   [key: string]: unknown;
 }
 
@@ -49,6 +61,18 @@ interface GetStateResponse extends SimpleSocketResponse {
   participant?: Participant | null;
   isActive?: boolean;
   allParticipants?: Participant[];
+  timeRemaining?: number;
+  duration?: number;
+  elapsed?: number;
+  startTime?: number;
+  endTime?: number;
+  round?: {
+    isActive?: boolean;
+    startTime?: number | null;
+    endTime?: number | null;
+    timeRemaining?: number;
+    duration?: number;
+  };
 }
 
 interface RoundInfo {
@@ -76,6 +100,10 @@ interface GameStateData {
 
 interface TimerData {
   timeRemaining?: number;
+  duration?: number;
+  elapsed?: number;
+  startTime?: number;
+  endTime?: number;
 }
 
 interface ErrorData {
@@ -92,6 +120,7 @@ export default function Lobbyr0() {
 
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [isRoundActive, setIsRoundActive] = useState(false);
+  const [roundEndTime, setRoundEndTime] = useState<number | null>(null);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [roundStarted, setRoundStarted] = useState(false);
@@ -103,6 +132,39 @@ export default function Lobbyr0() {
   >(null);
 
   const isAdmin = userRole === "ADMIN";
+
+  const applyRoundEndTime = useCallback(
+    (source?: {
+      endTime?: number | null;
+      startTime?: number | null;
+      duration?: number | null;
+      timeRemaining?: number | null;
+      elapsed?: number | null;
+    }) => {
+      if (!source) return;
+      if (
+        typeof source.endTime === "number" &&
+        Number.isFinite(source.endTime)
+      ) {
+        setRoundEndTime(source.endTime);
+      } else if (
+        typeof source.startTime === "number" &&
+        typeof source.duration === "number"
+      ) {
+        setRoundEndTime(source.startTime + source.duration);
+      } else if (
+        typeof source.duration === "number" &&
+        typeof source.elapsed === "number"
+      ) {
+        setRoundEndTime(
+          Date.now() + Math.max(0, source.duration - source.elapsed),
+        );
+      } else if ((source.timeRemaining ?? 0) > 0) {
+        setRoundEndTime(Date.now() + (source.timeRemaining as number));
+      }
+    },
+    [],
+  );
 
   // Functions
   const formatTime = (seconds: number) =>
@@ -144,7 +206,8 @@ export default function Lobbyr0() {
         );
       }
 
-      setIsRoundActive(response.isActive ?? false);
+      setIsRoundActive(response.isActive ?? response.round?.isActive ?? false);
+      applyRoundEndTime(response.round ?? response);
 
       if (response.participant) {
         if (response.participant.status === "IN_MATCH") {
@@ -152,7 +215,7 @@ export default function Lobbyr0() {
         }
       }
     },
-    [router],
+    [router, applyRoundEndTime],
   );
 
   // Authentication check useEffect
@@ -233,6 +296,9 @@ export default function Lobbyr0() {
       if (lobbyData.participants) setParticipants(lobbyData.participants);
       if (lobbyData.isActive !== undefined)
         setIsRoundActive(lobbyData.isActive);
+      else if (lobbyData.round?.isActive !== undefined)
+        setIsRoundActive(lobbyData.round.isActive);
+      applyRoundEndTime(lobbyData.round ?? lobbyData);
     };
 
     const handleRoundStart = (data: RoundStartData) => {
@@ -241,7 +307,7 @@ export default function Lobbyr0() {
           const dataToStore = {
             problems: data.problems,
             startTime: data.startTime,
-            duration: data.duration || 1200,
+            duration: data.duration || 1_200_000,
           };
           sessionStorage.setItem("round0_data", JSON.stringify(dataToStore));
         } catch (error) {
@@ -257,6 +323,10 @@ export default function Lobbyr0() {
 
       setRoundStarted(true);
       setIsRoundActive(true);
+      applyRoundEndTime({
+        startTime: data.startTime,
+        duration: data.duration || 1_200_000,
+      });
       localStorage.removeItem("battlecode-round-0-code-store");
       showSuccessToast("Round 0 has started! Redirecting...");
 
@@ -265,8 +335,7 @@ export default function Lobbyr0() {
       }, 1500);
     };
 
-    const handleTimer = (data: TimerData) =>
-      setTimeRemaining(data.timeRemaining || 0);
+    const handleTimer = (data: TimerData) => applyRoundEndTime(data);
 
     const handleRoundEnd = () => {
       showSuccessToast("Round 0 has ended.");
@@ -336,6 +405,17 @@ export default function Lobbyr0() {
       socket.off("round0:adminAdded", handleAdminAdded);
     };
   }, [socket, router, currentRoundData]);
+
+  useEffect(() => {
+    if (!roundEndTime || !isRoundActive) return;
+    const updateTimer = () =>
+      setTimeRemaining(
+        Math.max(0, Math.ceil((roundEndTime - Date.now()) / 1000)),
+      );
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [roundEndTime, isRoundActive]);
 
   // Early return for loading states
   if (authLoading || !authenticationChecked || isCheckingRound) {

@@ -35,6 +35,8 @@ interface MatchData {
   };
   startTime: number;
   duration: number;
+  endTime?: number;
+  timeRemaining?: number;
   difficulty?: string;
 }
 
@@ -216,6 +218,11 @@ export default function R1CodePage() {
     return String(data);
   };
 
+  const codeRef = useRef(code);
+  useEffect(() => {
+    codeRef.current = code;
+  }, [code]);
+
   const saveCurrentState = useCallback(() => {
     if (!problem) return;
     const key = getMatchStorageKey(problem.id);
@@ -226,7 +233,7 @@ export default function R1CodePage() {
         : { currentLanguage: language, languages: {} };
       state.currentLanguage = language;
       if (!state.languages) state.languages = {};
-      state.languages[language] = { code };
+      state.languages[language] = { code: codeRef.current || code };
       localStorage.setItem(key, JSON.stringify(state));
     } catch (e) {
       console.error("Failed to save state:", e);
@@ -238,17 +245,17 @@ export default function R1CodePage() {
     saveCurrentState();
     const key = getMatchStorageKey(problem.id);
     const savedStateStr = localStorage.getItem(key);
-    let newCode = problem.boilerplate?.[newLanguage] || "";
+    let newCode = "";
     if (savedStateStr) {
       try {
         const state: SavedMatchState = JSON.parse(savedStateStr);
-        newCode =
-          state.languages?.[newLanguage]?.code ||
-          problem.boilerplate?.[newLanguage] ||
-          "";
+        newCode = state.languages?.[newLanguage]?.code || "";
       } catch (e) {
         console.error("Failed to parse saved state on language change", e);
+        newCode = "";
       }
+    } else {
+      newCode = "";
     }
     setCode(newCode);
     setLanguage(newLanguage);
@@ -352,10 +359,14 @@ export default function R1CodePage() {
   };
 
   const timerTick = useCallback(() => {
-    if (!matchData?.startTime || !matchData?.duration) return;
-    const elapsed = Date.now() - matchData.startTime;
-    const remaining = Math.max(0, matchData.duration - elapsed);
-    const remainingSeconds = Math.floor(remaining / 1000);
+    if (!matchData?.startTime || (!matchData?.duration && !matchData?.endTime))
+      return;
+    const endTime =
+      matchData.endTime || matchData.startTime + matchData.duration;
+    const remainingSeconds = Math.max(
+      0,
+      Math.ceil((endTime - Date.now()) / 1000),
+    );
     setTimeRemaining(remainingSeconds);
     if (remainingSeconds <= 0) {
       handleSubmit();
@@ -423,22 +434,36 @@ export default function R1CodePage() {
     router.push("/r1/waiting");
   };
 
-  const handleRoundEnd = () => {
+  const handleRoundEnd = (_data?: { endTime?: number }) => {
     if (problem) localStorage.removeItem(getMatchStorageKey(problem.id));
     showInfoToast("Round 1 has ended");
     router.push("/");
   };
 
-  const handleTimerUpdate = (data: { timeRemaining: number }) => {
-    setTimeRemaining(data.timeRemaining);
+  const handleTimerUpdate = (data: {
+    timeRemaining?: number;
+    endTime?: number;
+  }) => {
+    const remainingMs =
+      typeof data.endTime === "number"
+        ? Math.max(0, data.endTime - Date.now())
+        : (data.timeRemaining ?? 0);
+    const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
 
-    // If timer is very low, warn user
-    if (data.timeRemaining <= 60 && data.timeRemaining > 0) {
-      showErrorToast(`Only ${data.timeRemaining} seconds remaining!`);
+    if (typeof data.endTime === "number" && Number.isFinite(data.endTime)) {
+      setMatchData((prev) => {
+        if (!prev || prev.endTime === data.endTime) return prev;
+        return { ...prev, endTime: data.endTime };
+      });
     }
 
-    // Auto-submit when time is up
-    if (data.timeRemaining <= 0) {
+    setTimeRemaining(remainingSeconds);
+
+    if (remainingSeconds <= 60 && remainingSeconds > 0) {
+      showErrorToast(`Only ${remainingSeconds} seconds remaining!`);
+    }
+
+    if (remainingSeconds <= 0) {
       showErrorToast("Time's up! Auto-submitting your solution...");
       handleSubmit();
     }
@@ -465,6 +490,7 @@ export default function R1CodePage() {
   const handleState = (data: {
     success?: boolean;
     matchData?: MatchData;
+    session?: { endTime?: number; timeRemaining?: number };
     globalTimeRemaining?: number;
   }) => {
     if (!data.success) return;
@@ -475,8 +501,19 @@ export default function R1CodePage() {
       );
     }
 
-    if (typeof data.globalTimeRemaining === "number") {
-      setTimeRemaining(data.globalTimeRemaining);
+    const remainingMs =
+      data.session?.timeRemaining ??
+      data.matchData?.timeRemaining ??
+      data.globalTimeRemaining;
+    if (typeof data.session?.endTime === "number") {
+      setMatchData((prev) =>
+        prev ? { ...prev, endTime: data.session!.endTime } : prev,
+      );
+      setTimeRemaining(
+        Math.max(0, Math.ceil((data.session.endTime - Date.now()) / 1000)),
+      );
+    } else if (typeof remainingMs === "number") {
+      setTimeRemaining(Math.max(0, Math.ceil(remainingMs / 1000)));
     }
   };
 
@@ -563,11 +600,11 @@ export default function R1CodePage() {
       try {
         const data: MatchData = JSON.parse(savedMatchData);
         setMatchData(data);
-        if (data.startTime && data.duration) {
-          // Calculate initial timer from saved data (fallback until backend sync)
-          const elapsed = Date.now() - data.startTime;
-          const remaining = Math.max(0, data.duration - elapsed);
-          setTimeRemaining(Math.floor(remaining / 1000));
+        if (data.endTime || (data.startTime && data.duration)) {
+          const endTime = data.endTime || data.startTime + data.duration;
+          setTimeRemaining(
+            Math.max(0, Math.ceil((endTime - Date.now()) / 1000)),
+          );
         }
         if (data.question) {
           const problemData: Problem = {
@@ -584,14 +621,11 @@ export default function R1CodePage() {
           const key = getMatchStorageKey(data.question.id);
           const savedStateStr = localStorage.getItem(key);
           let restoredLanguage = "python";
-          let restoredCode = problemData.boilerplate?.["python"] || "";
+          let restoredCode = "";
           if (savedStateStr) {
             const savedState: SavedMatchState = JSON.parse(savedStateStr);
             restoredLanguage = savedState.currentLanguage || "python";
-            restoredCode =
-              savedState.languages?.[restoredLanguage]?.code ||
-              problemData.boilerplate?.[restoredLanguage] ||
-              "";
+            restoredCode = savedState.languages?.[restoredLanguage]?.code || "";
           }
           setLanguage(restoredLanguage);
           setCode(restoredCode);
@@ -702,11 +736,8 @@ export default function R1CodePage() {
     };
   }, [isDragging, handleMouseMove]);
 
-  // Timer interval
-  useInterval(
-    timerTick,
-    matchPaused || (matchData && timeRemaining <= 0) ? null : 1000,
-  );
+  // Timer interval — do not stop when timeRemaining is still 0 on first paint
+  useInterval(timerTick, matchPaused ? null : 1000);
 
   if (authLoading || isLoading) {
     return (

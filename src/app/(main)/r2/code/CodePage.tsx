@@ -93,6 +93,11 @@ export default function CodePage({
   >(null);
   const [showHints, setShowHints] = useState(false);
 
+  const codeRef = useRef(code);
+  useEffect(() => {
+    codeRef.current = code;
+  }, [code]);
+
   const [codeEditorHeight, setCodeEditorHeight] = useState(60);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -156,19 +161,52 @@ export default function CodePage({
     }
   }, [monaco]);
 
+  const getStorageKey = () => `battlecode-round-${round}-code-store`;
+
+  // Load code on problem change
   useEffect(() => {
     try {
-      if (currentProblem && currentProblem.boilerplate) {
-        const newCode =
-          currentProblem.boilerplate[language] ||
-          currentProblem.boilerplate["python"] ||
-          "";
-        setCode(newCode);
+      if (currentProblem) {
+        const key = getStorageKey();
+        const stored = localStorage.getItem(key);
+        const store = stored ? JSON.parse(stored) : {};
+        const contextKey = `${round}:${currentProblem.id}:${language}`;
+        const savedCode = store[contextKey];
+        setCode(savedCode || "");
       }
     } catch (error) {
-      console.error("Error updating code for language change:", error);
+      console.error("Error loading code for problem change:", error);
     }
-  }, [language, currentProblem]);
+  }, [currentProblem, round, language]);
+
+  const handleLanguageChange = (newLanguage: string) => {
+    if (newLanguage === language || !currentProblem) return;
+    try {
+      const key = getStorageKey();
+      const stored = localStorage.getItem(key);
+      const store = stored ? JSON.parse(stored) : {};
+
+      const currentCode = codeRef.current;
+      // Save current code for old language
+      const oldContextKey = `${round}:${currentProblem.id}:${language}`;
+      if (currentCode !== undefined) {
+        store[oldContextKey] = currentCode;
+      }
+
+      // Retrieve code for new language
+      const newContextKey = `${round}:${currentProblem.id}:${newLanguage}`;
+      const savedCode = store[newContextKey];
+
+      const codeToSet = savedCode || "";
+
+      localStorage.setItem(key, JSON.stringify(store));
+      setCode(codeToSet);
+      setLanguage(newLanguage);
+    } catch (error) {
+      console.error("Error changing language:", error);
+      setLanguage(newLanguage);
+    }
+  };
 
   function handleEditorMount(
     editor: monaco.editor.IStandaloneCodeEditor,
@@ -580,7 +618,7 @@ export default function CodePage({
                 <div className="flex-1 flex gap-2">
                   <select
                     value={language}
-                    onChange={(e) => setLanguage(e.target.value)}
+                    onChange={(e) => handleLanguageChange(e.target.value)}
                     className="bg-gray-800 flex-1 text-white p-2 rounded border border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-500"
                   >
                     <option value="python">Python</option>

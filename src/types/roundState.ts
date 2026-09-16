@@ -14,9 +14,9 @@ interface BaseRoundState {
     isActive: boolean;
     status: "LOBBY" | "IN_PROGRESS" | "COMPLETED" | "LOCKED";
     startTime: number | null;
-    endTime: number | null;
-    timeRemaining: number;
-    duration: number;
+    endTime: number | null; // epoch ms
+    timeRemaining: number; // ms
+    duration: number; // ms
   };
 
   // Participant Data
@@ -41,9 +41,9 @@ interface BaseRoundState {
   session?: {
     type: "match" | "bounty" | "problem";
     id: string;
-    startTime: number;
-    endTime: number;
-    timeRemaining: number;
+    startTime: number; // epoch ms
+    endTime: number; // epoch ms
+    timeRemaining: number; // ms
     opponent?: {
       id: string;
       username: string;
@@ -60,7 +60,7 @@ interface BaseRoundState {
     // Round 0
     progress?: UserProgress;
 
-    // Round 1
+    // Round 1 (durations in ms)
     nextMatchmakingCycle?: number;
     globalTimeRemaining?: number;
 
