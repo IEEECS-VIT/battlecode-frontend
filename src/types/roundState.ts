@@ -94,6 +94,7 @@ interface Participant {
   username: string;
   email?: string;
   role?: string;
+  round2Role?: string;
   status: string;
   rank?: number;
   eventScore?: number;

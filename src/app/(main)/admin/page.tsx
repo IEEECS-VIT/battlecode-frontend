@@ -25,6 +25,7 @@ import { useSocket } from "@/contexts/SocketContext";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
 import CustomScrollbar from "@/components/shared/CustomScrollbar";
 import { BaseRoundState, Participant } from "@/types/roundState";
+import { normalizeRound2Role, type Round2Role } from "@/lib/round2Role";
 
 interface RoundStatus {
   roundNumber: number;
@@ -143,16 +144,66 @@ function hasBackendOpponent(
   return Boolean(opponent && opponent !== "undefined");
 }
 
+function isInMatchStatus(status?: string): boolean {
+  return /in[_-]?match/i.test(status || "");
+}
+
+function isBountyStatus(status?: string): boolean {
+  return /bounty/i.test(status || "");
+}
+
 function isPairedInMatch(user: Participant): boolean {
-  const inMatch = user.status === "in_match" || user.status === "in-match";
-  return inMatch && hasBackendOpponent(user);
+  return isInMatchStatus(user.status) && hasBackendOpponent(user);
+}
+
+function isCooldownStatus(status?: string): boolean {
+  return /cooldown/i.test(status || "");
+}
+
+function participantRound2Role(user: Participant): Round2Role | null {
+  return (
+    normalizeRound2Role(user.round2Role) ||
+    normalizeRound2Role(user.role) ||
+    normalizeRound2Role((user.status || "").split(":")[0])
+  );
+}
+
+function shouldShowOpponent(roundNumber: number): boolean {
+  return roundNumber === 1 || roundNumber === 2;
+}
+
+function cooldownUsersFromState(
+  participants: BaseRoundState["participants"],
+): Participant[] {
+  const fromBucket = participants.byStatus?.cooldown || [];
+  const seen = new Set(fromBucket.map((user) => user.userId).filter(Boolean));
+  const extras = (participants.all || []).filter((user) => {
+    if (!isCooldownStatus(user.status)) return false;
+    if (!user.userId) return true;
+    if (seen.has(user.userId)) return false;
+    seen.add(user.userId);
+    return true;
+  });
+  return [...fromBucket, ...extras];
+}
+
+function formatCooldownRemaining(endTime?: number): string | null {
+  if (typeof endTime !== "number" || endTime <= Date.now()) return null;
+  const totalSeconds = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+  const minutes = Math.floor(totalSeconds / 60)
+    .toString()
+    .padStart(2, "0");
+  const seconds = (totalSeconds % 60).toString().padStart(2, "0");
+  return `${minutes}:${seconds}`;
 }
 
 function activeUserStatusLabel(user: Participant): string {
-  if (isPairedInMatch(user)) return "In Match";
-  if (user.status === "in_match" || user.status === "in-match")
-    return "Playing";
-  if (user.status === "in_bounty") return "Bounty";
+  if (isCooldownStatus(user.status)) {
+    const remaining = formatCooldownRemaining(user.cooldownEndTime);
+    return remaining ? `Cooldown ${remaining}` : "Cooldown";
+  }
+  if (isInMatchStatus(user.status)) return "In Match";
+  if (isBountyStatus(user.status)) return "Bounty";
   return "Waiting";
 }
 
@@ -502,17 +553,19 @@ export default function Admin() {
           roundNumber,
         );
 
-        // Backend already filtered waiting + in_match + in_bounty users
+        const cooldownUsers = cooldownUsersFromState(participants);
         const activeUsers = [
           ...(participants.byStatus?.waiting || []),
           ...(participants.byStatus?.in_match || []),
           ...(participants.byStatus?.in_bounty || []),
+          ...cooldownUsers,
         ];
 
         console.log("[SOCKET STATE] Active users count:", {
           waiting: participants.byStatus?.waiting?.length || 0,
           in_match: participants.byStatus?.in_match?.length || 0,
           in_bounty: participants.byStatus?.in_bounty?.length || 0,
+          cooldown: cooldownUsers.length,
           total: activeUsers.length,
         });
 
@@ -1939,20 +1992,57 @@ export default function Admin() {
                       </p>
                       <div className="max-h-96 overflow-y-auto space-y-2">
                         {matchParticipants.map((participant, idx) => {
-                          const paired = isPairedInMatch(participant);
+                          const onCooldown = isCooldownStatus(
+                            participant.status,
+                          );
+                          const inMatch = isInMatchStatus(participant.status);
+                          const inBounty = isBountyStatus(participant.status);
+                          const r2Role =
+                            selectedRoundForMatches === 2
+                              ? participantRound2Role(participant)
+                              : null;
+                          const showVs =
+                            shouldShowOpponent(selectedRoundForMatches) &&
+                            isPairedInMatch(participant) &&
+                            Boolean(participant.opponentUsername);
+                          const statusTone = onCooldown
+                            ? "orange"
+                            : inMatch
+                              ? "blue"
+                              : inBounty
+                                ? "violet"
+                                : "yellow";
+                          const toneClass = {
+                            orange: {
+                              border: "border-orange-500",
+                              dot: "bg-orange-500",
+                              text: "text-orange-400",
+                            },
+                            blue: {
+                              border: "border-blue-500",
+                              dot: "bg-blue-500",
+                              text: "text-blue-400",
+                            },
+                            violet: {
+                              border: "border-violet-500",
+                              dot: "bg-violet-500",
+                              text: "text-violet-400",
+                            },
+                            yellow: {
+                              border: "border-yellow-500",
+                              dot: "bg-yellow-500",
+                              text: "text-yellow-400",
+                            },
+                          }[statusTone];
                           return (
                             <div
                               key={`match-${participant.userId}-${idx}`}
-                              className={`bg-gray-600/50 px-4 py-3 rounded border-l-4 ${
-                                paired ? "border-blue-500" : "border-yellow-500"
-                              }`}
+                              className={`bg-gray-600/50 px-4 py-3 rounded border-l-4 ${toneClass.border}`}
                             >
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-3">
                                   <div
-                                    className={`w-2 h-2 rounded-full ${
-                                      paired ? "bg-blue-500" : "bg-yellow-500"
-                                    }`}
+                                    className={`w-2 h-2 rounded-full ${toneClass.dot}`}
                                   ></div>
                                   <div className="flex flex-col">
                                     <span className="text-white font-medium">
@@ -1961,7 +2051,18 @@ export default function Admin() {
                                         participant.userId ||
                                         "Unknown"}
                                     </span>
-                                    {paired && participant.opponentUsername && (
+                                    {r2Role && (
+                                      <span
+                                        className={`text-xs font-semibold uppercase mt-0.5 ${
+                                          r2Role === "elite"
+                                            ? "text-amber-300"
+                                            : "text-sky-300"
+                                        }`}
+                                      >
+                                        {r2Role}
+                                      </span>
+                                    )}
+                                    {showVs && (
                                       <span className="text-sm text-blue-300 mt-1">
                                         🎮 vs{" "}
                                         <span className="font-semibold text-blue-200">
@@ -1972,9 +2073,7 @@ export default function Admin() {
                                   </div>
                                 </div>
                                 <span
-                                  className={`text-xs font-semibold uppercase ${
-                                    paired ? "text-blue-400" : "text-yellow-400"
-                                  }`}
+                                  className={`text-xs font-semibold uppercase ${toneClass.text}`}
                                 >
                                   {activeUserStatusLabel(participant)}
                                 </span>
