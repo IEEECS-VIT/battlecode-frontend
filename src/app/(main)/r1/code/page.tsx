@@ -23,6 +23,11 @@ import CustomScrollbar from "@/components/shared/CustomScrollbar";
 import SecureWrapper from "@/components/shared/SecureWrapper";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
 import ExpandableTestCase from "@/components/shared/ExpandableTestCase";
+import {
+  applyR1QuestionProgress,
+  clearR1QuestionProgress,
+  persistR1QuestionProgress,
+} from "@/lib/round1QuestionProgress";
 
 // Interfaces
 interface MatchData {
@@ -124,6 +129,18 @@ interface GetStateResponse {
       sampleTestCases?: any[];
       hints?: string[];
     };
+    problems?: Array<{
+      id: string;
+      title: string;
+      description: string;
+      difficulty: string;
+      duration?: number;
+      constraints?: string[];
+      boilerplate?: { [key: string]: string };
+      sampleTestCases?: any[];
+      hints?: string[];
+    }>;
+    currentProblemIndex?: number;
   };
 }
 
@@ -565,8 +582,15 @@ function CodePageComponent({ matchData, timeRemaining }: CodePageProps) {
     );
     setCode(savedCode || "");
     setProblem(problemData);
+    persistR1QuestionProgress({ question: problemData });
     setIsContextInitialized(true);
   }, [matchData, language, isContextInitialized, contextManager]);
+
+  useEffect(() => {
+    if (problem?.id) {
+      persistR1QuestionProgress({ question: problem });
+    }
+  }, [problem]);
 
   useEffect(() => {
     if (isContextInitialized && problem) {
@@ -1046,7 +1070,10 @@ export default function R1CodePage() {
         ) {
           data.endTime = Date.now() + data.timeRemaining;
         }
-        setMatchData(data);
+        const resumed = applyR1QuestionProgress(data);
+        persistR1QuestionProgress(resumed);
+        sessionStorage.setItem("round1_match_data", JSON.stringify(resumed));
+        setMatchData(resumed);
         setPageIsLoading(false); // Success! We have data, no need to ask the server.
         return; // Exit the effect early.
       } catch (error) {
@@ -1093,7 +1120,9 @@ export default function R1CodePage() {
           return;
         }
 
-        // Convert session data to old MatchData format
+        const resumedSession = applyR1QuestionProgress(response.session);
+        const resumedProblem =
+          resumedSession.problem || response.session.problem;
         const data: MatchData = {
           opponent: {
             id: response.session.opponent?.id || "",
@@ -1104,20 +1133,24 @@ export default function R1CodePage() {
                 : undefined,
           },
           question: {
-            id: response.session.problem?.id || "",
-            title: response.session.problem?.title || "",
-            description: response.session.problem?.description || "",
-            difficulty: response.session.problem?.difficulty || "",
-            duration: response.session.problem?.duration,
-            constraints: response.session.problem?.constraints || [],
-            boilerplate: response.session.problem?.boilerplate || {},
-            sampleTestCases: response.session.problem?.sampleTestCases || [],
-            hints: response.session.problem?.hints || [],
+            id: resumedProblem?.id || "",
+            title: resumedProblem?.title || "",
+            description: resumedProblem?.description || "",
+            difficulty: resumedProblem?.difficulty || "",
+            duration: resumedProblem?.duration,
+            constraints: resumedProblem?.constraints || [],
+            boilerplate: resumedProblem?.boilerplate || {},
+            sampleTestCases: resumedProblem?.sampleTestCases || [],
+            hints: resumedProblem?.hints || [],
           },
           startTime: response.session.startTime,
           endTime: response.session.endTime,
           duration: response.session.endTime - response.session.startTime,
         };
+        persistR1QuestionProgress({
+          ...resumedSession,
+          question: data.question,
+        });
         sessionStorage.setItem("round1_match_data", JSON.stringify(data));
         setMatchData(data);
       } else {
@@ -1168,6 +1201,7 @@ export default function R1CodePage() {
           "[MATCH END] Admin override accepted, overriding any previous state",
         );
         matchEndedRef.current = true;
+        clearR1QuestionProgress();
         sessionStorage.removeItem("round1_match_data");
         sessionStorage.removeItem("fullscreen_violations");
         setMatchEndData(data);
@@ -1185,6 +1219,7 @@ export default function R1CodePage() {
       }
 
       matchEndedRef.current = true;
+      clearR1QuestionProgress();
       sessionStorage.removeItem("round1_match_data");
       sessionStorage.removeItem("fullscreen_violations"); // Clear violations on match end
       console.log("[MATCH END] Processing:", data.type);
@@ -1193,6 +1228,7 @@ export default function R1CodePage() {
     };
 
     const handleRoundEnd = (_data?: { endTime?: number }) => {
+      clearR1QuestionProgress();
       sessionStorage.removeItem("round1_match_data");
       sessionStorage.removeItem("fullscreen_violations"); // Clear violations on round end
 
@@ -1209,7 +1245,6 @@ export default function R1CodePage() {
     const handleAdminRemoved = () => {
       console.log("You have been removed from Round 1 by an admin");
       showErrorToast("You have been removed from Round 1 by an admin");
-      localStorage.removeItem("battlecode-round-1-code-store");
       sessionStorage.removeItem("round1_match_data");
       sessionStorage.removeItem("fullscreen_violations"); // Clear violations when admin removes
       router.push("/");

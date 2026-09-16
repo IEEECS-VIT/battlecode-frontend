@@ -14,6 +14,12 @@ import {
 } from "@/components/shared/CustomToast";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
 import { BaseRoundState } from "@/types/roundState";
+import {
+  applyR1QuestionProgress,
+  clearR1QuestionProgress,
+  persistR1QuestionProgress,
+  readR1QuestionProgress,
+} from "@/lib/round1QuestionProgress";
 
 // Interfaces
 interface Participant {
@@ -87,6 +93,8 @@ interface GetStateResponse {
       rank?: number | string;
     };
     problem?: Problem;
+    problems?: Problem[];
+    currentProblemIndex?: number;
   };
   roundSpecific?: {
     nextMatchmakingCycle?: number;
@@ -236,9 +244,11 @@ export default function WaitingRoomR1() {
           if (me.status === "in_match") {
             if (response.session) {
               showInfoToast("Rejoining your active match...");
+              const resumedSession = applyR1QuestionProgress(response.session);
+              persistR1QuestionProgress(resumedSession);
               sessionStorage.setItem(
                 "round1_match_data",
-                JSON.stringify(response.session),
+                JSON.stringify(resumedSession),
               );
               router.push("/r1/code");
             } else {
@@ -265,8 +275,12 @@ export default function WaitingRoomR1() {
 
     const handleMatchFound = (data: MatchFoundData) => {
       showSuccessToast("Match found! Redirecting...");
-      localStorage.removeItem("battlecode-round-1-code-store");
-      sessionStorage.setItem("round1_match_data", JSON.stringify(data));
+      if (!readR1QuestionProgress()) {
+        localStorage.removeItem("battlecode-round-1-code-store");
+      }
+      const resumed = applyR1QuestionProgress(data);
+      persistR1QuestionProgress(resumed);
+      sessionStorage.setItem("round1_match_data", JSON.stringify(resumed));
       router.push("/r1/code");
     };
 
@@ -338,6 +352,7 @@ export default function WaitingRoomR1() {
 
     const handleRoundEnd = (data?: { endTime?: number }) => {
       applyRoundEndTime(data);
+      clearR1QuestionProgress();
       showInfoToast("Round 1 has ended.");
       router.push("/dashboard");
     };
@@ -349,7 +364,6 @@ export default function WaitingRoomR1() {
     const handleAdminRemoved = () => {
       console.log("You have been removed from Round 1 by an admin");
       showErrorToast("You have been removed from Round 1 by an admin");
-      localStorage.removeItem("battlecode-round-1-code-store");
       sessionStorage.removeItem("round1_match_data");
       router.push("/");
     };

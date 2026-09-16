@@ -13,6 +13,11 @@ import {
   showErrorToast,
 } from "@/components/shared/CustomToast";
 import LoadingOverlay from "@/components/shared/LoadingOverlay";
+import {
+  applyR1QuestionProgress,
+  clearR1QuestionProgress,
+  persistR1QuestionProgress,
+} from "@/lib/round1QuestionProgress";
 
 // Interfaces
 interface Participant {
@@ -352,12 +357,15 @@ export default function Lobbyr1() {
       setIsRoundActive(true);
       applyRoundEndTime(data?.round);
       localStorage.removeItem("battlecode-round-1-code-store");
+      clearR1QuestionProgress();
       showSuccessToast("Round 1 has started! Entering matchmaking...");
       setTimeout(() => router.push("/r1/waiting"), 2000);
     };
 
     const handleMatchFound = (data: MatchFoundData) => {
-      sessionStorage.setItem("round1_match_data", JSON.stringify(data));
+      const resumed = applyR1QuestionProgress(data);
+      persistR1QuestionProgress(resumed);
+      sessionStorage.setItem("round1_match_data", JSON.stringify(resumed));
       sessionStorage.removeItem("fullscreen_violations");
       showSuccessToast("Match found! Redirecting...");
       setTimeout(() => router.push("/r1/code"), 1500);
@@ -372,6 +380,7 @@ export default function Lobbyr1() {
 
     const handleRoundEnd = (data?: { endTime?: number }) => {
       applyRoundEndTime(data);
+      clearR1QuestionProgress();
       showSuccessToast("Round 1 has ended.");
       router.push("/dashboard");
     };
@@ -379,7 +388,6 @@ export default function Lobbyr1() {
     const handleAdminRemoved = () => {
       console.log("You have been removed from Round 1 by an admin");
       showErrorToast("You have been removed from Round 1 by an admin");
-      localStorage.removeItem("battlecode-round-1-code-store");
       sessionStorage.removeItem("round1_match_data");
       router.push("/");
     };
