@@ -74,7 +74,7 @@ export default function Landing() {
   }, [socket, isConnected, router]);
 
   return (
-    <div>
+    <div className="select-none">
       <Hero />
     </div>
   );
