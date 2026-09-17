@@ -17,6 +17,7 @@ import {
   applyR1QuestionProgress,
   clearR1QuestionProgress,
   persistR1QuestionProgress,
+  type R1ProgressSource,
 } from "@/lib/round1QuestionProgress";
 
 // Interfaces
@@ -363,7 +364,7 @@ export default function Lobbyr1() {
     };
 
     const handleMatchFound = (data: MatchFoundData) => {
-      const resumed = applyR1QuestionProgress(data);
+      const resumed = applyR1QuestionProgress(data as R1ProgressSource);
       persistR1QuestionProgress(resumed);
       sessionStorage.setItem("round1_match_data", JSON.stringify(resumed));
       sessionStorage.removeItem("fullscreen_violations");
