@@ -13,7 +13,7 @@ export const createClient = async (cookieStore?: ReadonlyRequestCookies) => {
         getAll() {
           return cookieHandler.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options?: Parameters<typeof cookieHandler.set>[2] }[]) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieHandler.set(name, value, options),
